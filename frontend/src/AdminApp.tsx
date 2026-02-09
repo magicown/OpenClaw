@@ -18,7 +18,8 @@ import {
   LogOut, User as UserIcon, Users, LayoutDashboard,
   Plus, ChevronDown, ArrowLeft, Shield,
   ClipboardList, ArrowRight, Clock, CheckCircle2, Activity,
-  RotateCcw, Cpu, FileCheck, X
+  RotateCcw, Cpu, FileCheck, X, Server, Globe, KeyRound,
+  EyeOff, Copy, Check
 } from 'lucide-react';
 
 const API_BASE = '/api';
@@ -81,7 +82,7 @@ interface AdminAppProps {
   onLogout: () => void;
 }
 
-type Tab = 'process' | 'board' | 'users';
+type Tab = 'process' | 'board' | 'users' | 'servers';
 type BoardView = 'list' | 'detail';
 
 // Workflow step types
@@ -117,6 +118,22 @@ interface ProcessLog {
   content: string;
   created_by: string;
   created_at: string;
+}
+
+// 마크다운 문법 제거 → 깔끔한 텍스트로 변환
+function cleanMarkdown(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/^#{1,6}\s+/gm, '')           // # 헤더 제거
+    .replace(/\*\*([^*]+)\*\*/g, '$1')      // **굵은글씨** → 굵은글씨
+    .replace(/\*([^*]+)\*/g, '$1')          // *이탤릭* → 이탤릭
+    .replace(/^---+$/gm, '')                // --- 구분선 제거
+    .replace(/^\|.*\|$/gm, '')              // | 테이블 | 제거
+    .replace(/^>\s?/gm, '')                 // > 인용 제거
+    .replace(/`([^`]+)`/g, '$1')            // `코드` → 코드
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // [링크](url) → 링크
+    .replace(/\n{3,}/g, '\n\n')             // 연속 빈줄 정리
+    .trim();
 }
 
 const STEP_CONFIG: Record<WorkflowStep, { label: string; className: string; icon: React.ReactNode }> = {
@@ -220,6 +237,17 @@ export default function AdminApp({ currentUser, onLogout }: AdminAppProps) {
               <Users className="h-4 w-4 inline mr-1.5 -mt-0.5" />
               회원 관리
             </button>
+            <button
+              onClick={() => setActiveTab('servers')}
+              className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'servers'
+                  ? 'border-white text-white'
+                  : 'border-transparent text-indigo-300 hover:text-white hover:border-indigo-400'
+              }`}
+            >
+              <Server className="h-4 w-4 inline mr-1.5 -mt-0.5" />
+              서버 관리
+            </button>
           </nav>
         </div>
       </div>
@@ -230,6 +258,8 @@ export default function AdminApp({ currentUser, onLogout }: AdminAppProps) {
           <ProcessManagement currentUser={currentUser} />
         ) : activeTab === 'board' ? (
           <BoardManagement currentUser={currentUser} />
+        ) : activeTab === 'servers' ? (
+          <ServerManagement />
         ) : (
           <UserManagement currentUser={currentUser} />
         )}
@@ -260,6 +290,9 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
   // Transition
   const [transitionContent, setTransitionContent] = useState('');
   const [transitioning, setTransitioning] = useState(false);
+
+  // Review feedback (재확인 요청)
+  const [reviewFeedback, setReviewFeedback] = useState('');
 
   // Comment
   const [commentContent, setCommentContent] = useState('');
@@ -388,6 +421,38 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
       }
     } catch (err) {
       console.error('Failed to transition step:', err);
+    } finally {
+      setTransitioning(false);
+    }
+  };
+
+  // 재확인 요청: 관리자 피드백과 함께 registered로 되돌려 AI 재분석
+  const handleReviewRequest = async (postId: number) => {
+    if (!reviewFeedback.trim()) return;
+    try {
+      setTransitioning(true);
+      await fetch(`${API_BASE}/process.php`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          post_id: postId,
+          step: 'registered',
+          content: `[재확인 요청] ${reviewFeedback}`,
+        }),
+      });
+      setReviewFeedback('');
+
+      // Reload
+      await loadPosts();
+      if (selectedPost && selectedPost.id === postId) {
+        const updated = { ...selectedPost, current_step: 'registered' as WorkflowStep, status: 'registered' };
+        setSelectedPost(updated);
+        const logsRes = await fetch(`${API_BASE}/process.php?post_id=${postId}`);
+        const logsData = await logsRes.json();
+        setProcessLogs(logsData.logs || logsData || []);
+      }
+    } catch (err) {
+      console.error('Failed to request review:', err);
     } finally {
       setTransitioning(false);
     }
@@ -523,7 +588,7 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
                               <span className="text-xs text-gray-500">by {log.created_by}</span>
                             </div>
                             {log.content && (
-                              <p className="text-sm text-gray-700 mt-1">{log.content}</p>
+                              <p className="text-sm text-gray-700 mt-1 whitespace-pre-wrap">{cleanMarkdown(log.content)}</p>
                             )}
                           </div>
                         </div>
@@ -535,7 +600,72 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
             </Card>
 
             {/* Status Transition Actions */}
-            {transitions.length > 0 && (
+            {currentStep === 'pending_approval' ? (
+              /* 승인 대기 전용 UI: 승인 / 재확인 요청 분리 */
+              <div className="space-y-4">
+                {/* 승인 카드 */}
+                <Card className="border-emerald-200 bg-emerald-50/30">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base flex items-center gap-2 text-emerald-700">
+                      <CheckCircle2 className="h-4 w-4" />
+                      승인 처리
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <p className="text-sm text-emerald-600">분석 내용을 확인하고 작업 진행을 승인합니다.</p>
+                    <Textarea
+                      value={transitionContent}
+                      onChange={e => setTransitionContent(e.target.value)}
+                      placeholder="승인 메모 (선택사항)"
+                      rows={2}
+                      className="bg-white"
+                    />
+                    <Button
+                      size="sm"
+                      disabled={transitioning}
+                      onClick={() => handleTransition(selectedPost.id, 'ai_processing')}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                    >
+                      <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />
+                      승인 (작업 시작)
+                    </Button>
+                  </CardContent>
+                </Card>
+
+                {/* 재확인 요청 카드 */}
+                <Card className="border-amber-200 bg-amber-50/30">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base flex items-center gap-2 text-amber-700">
+                      <RotateCcw className="h-4 w-4" />
+                      재확인 요청
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <p className="text-sm text-amber-600">분석 내용이 부족하거나 수정이 필요한 경우, 피드백을 작성하면 해당 내용을 반영하여 다시 분석합니다.</p>
+                    <Textarea
+                      value={reviewFeedback}
+                      onChange={e => setReviewFeedback(e.target.value)}
+                      placeholder="재확인이 필요한 이유와 추가 확인 사항을 구체적으로 작성해주세요 (필수)"
+                      rows={4}
+                      className="bg-white"
+                    />
+                    <Button
+                      size="sm"
+                      disabled={transitioning || !reviewFeedback.trim()}
+                      onClick={() => handleReviewRequest(selectedPost.id)}
+                      className="bg-amber-600 hover:bg-amber-700 text-white"
+                      variant="default"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+                      재확인 요청
+                    </Button>
+                    {!reviewFeedback.trim() && (
+                      <p className="text-xs text-amber-500">재확인 요청 시 피드백 내용을 반드시 입력해야 합니다.</p>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            ) : transitions.length > 0 ? (
               <Card className="border-indigo-200 bg-indigo-50/30">
                 <CardHeader>
                   <CardTitle className="text-base flex items-center gap-2">
@@ -571,7 +701,7 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
                   </div>
                 </CardContent>
               </Card>
-            )}
+            ) : null}
 
             {/* Comments */}
             <div>
@@ -598,7 +728,7 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
                         </div>
                       </CardHeader>
                       <CardContent>
-                        <p className="whitespace-pre-wrap text-gray-700 text-sm leading-relaxed">{comment.content}</p>
+                        <p className="whitespace-pre-wrap text-gray-700 text-sm leading-relaxed">{comment.is_ai_answer ? cleanMarkdown(comment.content) : comment.content}</p>
                       </CardContent>
                     </Card>
                   ))}
@@ -798,8 +928,11 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
                     </div>
                   </div>
 
-                  {/* 처리 진행 박스 */}
-                  <div className="flex items-stretch gap-0 rounded-lg border border-slate-200 overflow-hidden relative">
+                  {/* 처리 진행 박스 (클릭 시 상세 페이지) */}
+                  <div
+                    className="flex items-stretch gap-0 rounded-lg border border-slate-200 overflow-hidden relative cursor-pointer hover:border-indigo-300 transition-colors"
+                    onClick={() => loadPostDetail(post)}
+                  >
                     {MAIN_FLOW.map((step, idx) => {
                       const cfg = STEP_CONFIG[step];
                       const isCurrent = step === currentStep;
@@ -880,13 +1013,16 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
 
                   {/* 특수 상태 표시 (admin_confirm / rework) */}
                   {isSpecial && (
-                    <div className={`mt-2 flex items-center gap-2 px-3 py-2 rounded-md border-2 animate-pulse ${STEP_CONFIG[currentStep].className}`}>
+                    <div
+                      className={`mt-2 flex items-center gap-2 px-3 py-2 rounded-md border-2 animate-pulse cursor-pointer hover:opacity-80 ${STEP_CONFIG[currentStep].className}`}
+                      onClick={() => loadPostDetail(post)}
+                    >
                       <div className="animate-bounce" style={{ animationDuration: '2s' }}>
                         {STEP_CONFIG[currentStep].icon}
                       </div>
                       <span className="text-xs font-bold">{STEP_CONFIG[currentStep].label}</span>
                       <span className="text-[9px] font-bold animate-pulse">진행 중</span>
-                      <span className="text-xs opacity-70">- {(post.last_process_log || post.last_log) || '처리 중'}</span>
+                      <span className="text-xs opacity-70">- {cleanMarkdown((post.last_process_log || post.last_log) || '처리 중')}</span>
                     </div>
                   )}
 
@@ -894,7 +1030,7 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
                   {!isSpecial && (post.last_process_log || post.last_log) && (
                     <div className="mt-2 text-xs text-slate-500 truncate">
                       <Clock className="h-3 w-3 inline mr-1" />
-                      {(post.last_process_log || post.last_log)}
+                      {cleanMarkdown((post.last_process_log || post.last_log) || '')}
                     </div>
                   )}
                 </CardContent>
@@ -1199,7 +1335,7 @@ function BoardManagement({ currentUser }: { currentUser: User }) {
                     </div>
                   </CardHeader>
                   <CardContent>
-                    <p className="whitespace-pre-wrap text-gray-700 text-sm leading-relaxed">{comment.content}</p>
+                    <p className="whitespace-pre-wrap text-gray-700 text-sm leading-relaxed">{comment.is_ai_answer ? cleanMarkdown(comment.content) : comment.content}</p>
                   </CardContent>
                 </Card>
               ))}
@@ -1658,6 +1794,608 @@ function UserManagement({ currentUser }: { currentUser: User }) {
             <DialogTitle>회원 삭제</DialogTitle>
             <DialogDescription>
               '{deleteTargetUser?.display_name}' ({deleteTargetUser?.username}) 회원을 삭제하시겠습니까?
+              이 작업은 되돌릴 수 없습니다.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>취소</Button>
+            <Button variant="destructive" onClick={handleDelete}>삭제</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// ─── Server Management ───────────────────────────────────────
+
+interface ServerInfo {
+  id: number;
+  site_name: string;
+  display_name: string;
+  server_ip: string;
+  ssh_user: string;
+  ssh_password?: string;
+  db_user: string;
+  db_password?: string;
+  site_url: string;
+  site_login_id: string;
+  site_login_pw?: string;
+  admin_url: string;
+  admin_login_id: string;
+  admin_login_pw?: string;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function ServerManagement() {
+  const [servers, setServers] = useState<ServerInfo[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Dialog
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingServer, setEditingServer] = useState<ServerInfo | null>(null);
+  const [formData, setFormData] = useState({
+    site_name: '', display_name: '', server_ip: '',
+    ssh_user: 'root', ssh_password: '',
+    db_user: 'root', db_password: '',
+    site_url: '', site_login_id: '', site_login_pw: '',
+    admin_url: '', admin_login_id: '', admin_login_pw: '',
+    notes: '',
+  });
+  const [formError, setFormError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  // Detail view (비밀번호 포함)
+  const [detailServer, setDetailServer] = useState<ServerInfo | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>({});
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  // Delete
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<ServerInfo | null>(null);
+
+  const loadServers = useCallback(async () => {
+    try {
+      setLoading(true);
+      const res = await fetch(`${API_BASE}/admin/servers.php`);
+      if (!res.ok) throw new Error('Failed to fetch servers');
+      setServers(await res.json());
+    } catch (err) {
+      console.error('Failed to load servers:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadServers(); }, [loadServers]);
+
+  const loadServerDetail = async (id: number) => {
+    try {
+      setDetailLoading(true);
+      const res = await fetch(`${API_BASE}/admin/servers.php?id=${id}`);
+      if (!res.ok) throw new Error('Failed');
+      const data = await res.json();
+      setDetailServer(data);
+      setShowPasswords({});
+    } catch (err) {
+      console.error('Failed to load server detail:', err);
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const openCreateDialog = () => {
+    setEditingServer(null);
+    setFormData({
+      site_name: '', display_name: '', server_ip: '',
+      ssh_user: 'root', ssh_password: '',
+      db_user: 'root', db_password: '',
+      site_url: '', site_login_id: '', site_login_pw: '',
+      admin_url: '', admin_login_id: '', admin_login_pw: '',
+      notes: '',
+    });
+    setFormError('');
+    setDialogOpen(true);
+  };
+
+  const openEditDialog = async (server: ServerInfo) => {
+    try {
+      const res = await fetch(`${API_BASE}/admin/servers.php?id=${server.id}`);
+      const detail = await res.json();
+      setEditingServer(detail);
+      setFormData({
+        site_name: detail.site_name || '',
+        display_name: detail.display_name || '',
+        server_ip: detail.server_ip || '',
+        ssh_user: detail.ssh_user || 'root',
+        ssh_password: '',
+        db_user: detail.db_user || 'root',
+        db_password: '',
+        site_url: detail.site_url || '',
+        site_login_id: detail.site_login_id || '',
+        site_login_pw: '',
+        admin_url: detail.admin_url || '',
+        admin_login_id: detail.admin_login_id || '',
+        admin_login_pw: '',
+        notes: detail.notes || '',
+      });
+      setFormError('');
+      setDialogOpen(true);
+    } catch (err) {
+      console.error('Failed to load server for edit:', err);
+    }
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError('');
+
+    if (!formData.site_name.trim() || !formData.display_name.trim() || !formData.server_ip.trim()) {
+      setFormError('사이트명, 표시명, 서버 IP는 필수입니다.');
+      return;
+    }
+
+    try {
+      setSaving(true);
+      const body: Record<string, string> = {};
+      for (const [key, value] of Object.entries(formData)) {
+        if (editingServer) {
+          // 수정 시: 비밀번호 필드는 값이 있을 때만 전송
+          const isPwField = ['ssh_password', 'db_password', 'site_login_pw', 'admin_login_pw'].includes(key);
+          if (isPwField && !value) continue;
+        }
+        body[key] = value;
+      }
+
+      const url = editingServer
+        ? `${API_BASE}/admin/servers.php?id=${editingServer.id}`
+        : `${API_BASE}/admin/servers.php`;
+      const method = editingServer ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '저장 실패');
+
+      setDialogOpen(false);
+      loadServers();
+      if (detailServer && editingServer && detailServer.id === editingServer.id) {
+        loadServerDetail(editingServer.id);
+      }
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : '저장에 실패했습니다.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    try {
+      const res = await fetch(`${API_BASE}/admin/servers.php?id=${deleteTarget.id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '삭제 실패');
+      setDeleteDialogOpen(false);
+      setDeleteTarget(null);
+      if (detailServer && detailServer.id === deleteTarget.id) {
+        setDetailServer(null);
+      }
+      loadServers();
+    } catch (err) {
+      console.error('Failed to delete server:', err);
+    }
+  };
+
+  const copyToClipboard = (text: string, field: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedField(field);
+    setTimeout(() => setCopiedField(null), 2000);
+  };
+
+  const togglePassword = (field: string) => {
+    setShowPasswords(prev => ({ ...prev, [field]: !prev[field] }));
+  };
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('ko-KR', {
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit',
+    });
+  };
+
+  // 비밀번호 표시 UI 헬퍼
+  const PasswordField = ({ label, value, field }: { label: string; value?: string; field: string }) => (
+    <div className="flex items-center justify-between py-1.5 px-3 bg-slate-50 rounded">
+      <span className="text-xs text-slate-500 w-24 flex-shrink-0">{label}</span>
+      <div className="flex items-center gap-1.5 flex-1 justify-end">
+        <span className="text-sm font-mono">
+          {showPasswords[field] ? (value || '-') : (value ? '••••••••' : '-')}
+        </span>
+        {value && (
+          <>
+            <button onClick={() => togglePassword(field)} className="p-1 hover:bg-slate-200 rounded transition-colors">
+              {showPasswords[field] ? <EyeOff className="h-3.5 w-3.5 text-slate-400" /> : <Eye className="h-3.5 w-3.5 text-slate-400" />}
+            </button>
+            <button onClick={() => copyToClipboard(value, field)} className="p-1 hover:bg-slate-200 rounded transition-colors">
+              {copiedField === field ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5 text-slate-400" />}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+
+  // ─── Detail View ───
+  if (detailServer) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center gap-3">
+          <Button variant="ghost" size="sm" onClick={() => setDetailServer(null)}>
+            <ArrowLeft className="h-4 w-4 mr-1" />
+            목록으로
+          </Button>
+          <span className="text-sm text-gray-500">서버 상세 정보</span>
+        </div>
+
+        {detailLoading ? (
+          <div className="flex justify-center py-12 text-gray-500">로딩 중...</div>
+        ) : (
+          <>
+            <Card className="border-slate-200">
+              <CardHeader>
+                <div className="flex items-start justify-between">
+                  <div className="space-y-1">
+                    <CardTitle className="text-xl flex items-center gap-2">
+                      <Server className="h-5 w-5 text-indigo-600" />
+                      {detailServer.display_name}
+                    </CardTitle>
+                    <CardDescription className="flex items-center gap-2">
+                      <Badge variant="outline">{detailServer.site_name}</Badge>
+                      <span className="text-slate-400">|</span>
+                      <span className="font-mono text-sm">{detailServer.server_ip}</span>
+                    </CardDescription>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={() => openEditDialog(detailServer)}>
+                      수정
+                    </Button>
+                    <Button
+                      variant="destructive" size="sm"
+                      onClick={() => { setDeleteTarget(detailServer); setDeleteDialogOpen(true); }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5 mr-1" />
+                      삭제
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+            </Card>
+
+            {/* SSH 접속 정보 */}
+            <Card className="border-slate-200">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2 text-slate-700">
+                  <KeyRound className="h-4 w-4 text-orange-500" />
+                  SSH 접속 정보
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-1">
+                <div className="flex items-center justify-between py-1.5 px-3 bg-slate-50 rounded">
+                  <span className="text-xs text-slate-500 w-24">IP</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-sm font-mono">{detailServer.server_ip}</span>
+                    <button onClick={() => copyToClipboard(detailServer.server_ip, 'ip')} className="p-1 hover:bg-slate-200 rounded">
+                      {copiedField === 'ip' ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5 text-slate-400" />}
+                    </button>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between py-1.5 px-3 bg-slate-50 rounded">
+                  <span className="text-xs text-slate-500 w-24">사용자</span>
+                  <span className="text-sm font-mono">{detailServer.ssh_user}</span>
+                </div>
+                <PasswordField label="비밀번호" value={detailServer.ssh_password} field="ssh_pw" />
+              </CardContent>
+            </Card>
+
+            {/* DB 접속 정보 */}
+            <Card className="border-slate-200">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2 text-slate-700">
+                  <KeyRound className="h-4 w-4 text-blue-500" />
+                  DB 접속 정보
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-1">
+                <div className="flex items-center justify-between py-1.5 px-3 bg-slate-50 rounded">
+                  <span className="text-xs text-slate-500 w-24">사용자</span>
+                  <span className="text-sm font-mono">{detailServer.db_user}</span>
+                </div>
+                <PasswordField label="비밀번호" value={detailServer.db_password} field="db_pw" />
+              </CardContent>
+            </Card>
+
+            {/* 사이트 정보 */}
+            <Card className="border-slate-200">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2 text-slate-700">
+                  <Globe className="h-4 w-4 text-emerald-500" />
+                  사이트 정보
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-1">
+                <div className="flex items-center justify-between py-1.5 px-3 bg-slate-50 rounded">
+                  <span className="text-xs text-slate-500 w-24">유저 사이트</span>
+                  <span className="text-sm">{detailServer.site_url || '-'}</span>
+                </div>
+                <div className="flex items-center justify-between py-1.5 px-3 bg-slate-50 rounded">
+                  <span className="text-xs text-slate-500 w-24">로그인 ID</span>
+                  <span className="text-sm font-mono">{detailServer.site_login_id || '-'}</span>
+                </div>
+                <PasswordField label="로그인 PW" value={detailServer.site_login_pw} field="site_pw" />
+              </CardContent>
+            </Card>
+
+            {/* 관리자 페이지 */}
+            <Card className="border-slate-200">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2 text-slate-700">
+                  <Shield className="h-4 w-4 text-purple-500" />
+                  파트너 관리자
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-1">
+                <div className="flex items-center justify-between py-1.5 px-3 bg-slate-50 rounded">
+                  <span className="text-xs text-slate-500 w-24">관리자 URL</span>
+                  <span className="text-sm break-all">{detailServer.admin_url || '-'}</span>
+                </div>
+                <div className="flex items-center justify-between py-1.5 px-3 bg-slate-50 rounded">
+                  <span className="text-xs text-slate-500 w-24">관리자 ID</span>
+                  <span className="text-sm font-mono">{detailServer.admin_login_id || '-'}</span>
+                </div>
+                <PasswordField label="관리자 PW" value={detailServer.admin_login_pw} field="admin_pw" />
+              </CardContent>
+            </Card>
+
+            {detailServer.notes && (
+              <Card className="border-slate-200">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm text-slate-700">비고</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-slate-600 whitespace-pre-wrap">{detailServer.notes}</p>
+                </CardContent>
+              </Card>
+            )}
+
+            <div className="text-xs text-slate-400 text-right">
+              등록: {formatDate(detailServer.created_at)} | 수정: {formatDate(detailServer.updated_at)}
+            </div>
+          </>
+        )}
+
+        {/* Delete Dialog */}
+        <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>서버 삭제</DialogTitle>
+              <DialogDescription>
+                '{deleteTarget?.display_name}' 서버 정보를 삭제하시겠습니까?
+                이 작업은 되돌릴 수 없습니다.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>취소</Button>
+              <Button variant="destructive" onClick={handleDelete}>삭제</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  }
+
+  // ─── List View ───
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+          <Server className="h-5 w-5 text-indigo-600" />
+          서버 목록
+        </h2>
+        <Button onClick={openCreateDialog} className="bg-indigo-600 hover:bg-indigo-700">
+          <Plus className="h-4 w-4 mr-1" />
+          서버 추가
+        </Button>
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-12 text-gray-500">로딩 중...</div>
+      ) : servers.length === 0 ? (
+        <Card><CardContent className="py-12 text-center text-gray-500">등록된 서버가 없습니다.</CardContent></Card>
+      ) : (
+        <div className="grid gap-3">
+          {servers.map(server => (
+            <Card
+              key={server.id}
+              className="border-slate-200 hover:shadow-md transition-shadow cursor-pointer"
+              onClick={() => loadServerDetail(server.id)}
+            >
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="h-10 w-10 rounded-lg bg-indigo-100 flex items-center justify-center">
+                      <Server className="h-5 w-5 text-indigo-600" />
+                    </div>
+                    <div>
+                      <div className="font-semibold text-slate-800">{server.display_name}</div>
+                      <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5">
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0">{server.site_name}</Badge>
+                        <span className="font-mono">{server.server_ip}</span>
+                        {server.site_url && (
+                          <>
+                            <span className="text-slate-300">|</span>
+                            <Globe className="h-3 w-3" />
+                            <span>{server.site_url}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
+                    <Button variant="ghost" size="sm" onClick={() => openEditDialog(server)}>수정</Button>
+                    <Button
+                      variant="ghost" size="sm"
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                      onClick={() => { setDeleteTarget(server); setDeleteDialogOpen(true); }}
+                    >
+                      삭제
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* Create/Edit Dialog */}
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{editingServer ? '서버 수정' : '서버 추가'}</DialogTitle>
+            <DialogDescription>
+              {editingServer ? '서버 정보를 수정합니다. 비밀번호는 변경 시에만 입력하세요.' : '새로운 서버를 등록합니다.'}
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleSave}>
+            <div className="space-y-4 py-2">
+              {formError && (
+                <div className="p-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-md">{formError}</div>
+              )}
+
+              {/* 기본 정보 */}
+              <div className="space-y-1">
+                <span className="text-xs font-semibold text-slate-500 uppercase">기본 정보</span>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="s_site_name" className="text-xs">사이트명 *</Label>
+                    <Input id="s_site_name" value={formData.site_name} onChange={e => setFormData(d => ({ ...d, site_name: e.target.value }))} placeholder="맨하탄" required />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="s_display_name" className="text-xs">표시명 *</Label>
+                    <Input id="s_display_name" value={formData.display_name} onChange={e => setFormData(d => ({ ...d, display_name: e.target.value }))} placeholder="맨하탄 (bibi-66.com)" required />
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="s_server_ip" className="text-xs">서버 IP *</Label>
+                  <Input id="s_server_ip" value={formData.server_ip} onChange={e => setFormData(d => ({ ...d, server_ip: e.target.value }))} placeholder="1.2.3.4" required />
+                </div>
+              </div>
+
+              {/* SSH 정보 */}
+              <div className="space-y-1">
+                <span className="text-xs font-semibold text-slate-500 uppercase flex items-center gap-1">
+                  <KeyRound className="h-3 w-3" /> SSH 접속
+                </span>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="s_ssh_user" className="text-xs">사용자</Label>
+                    <Input id="s_ssh_user" value={formData.ssh_user} onChange={e => setFormData(d => ({ ...d, ssh_user: e.target.value }))} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="s_ssh_password" className="text-xs">비밀번호 {editingServer ? '(변경 시만)' : ''}</Label>
+                    <Input id="s_ssh_password" type="password" value={formData.ssh_password} onChange={e => setFormData(d => ({ ...d, ssh_password: e.target.value }))} />
+                  </div>
+                </div>
+              </div>
+
+              {/* DB 정보 */}
+              <div className="space-y-1">
+                <span className="text-xs font-semibold text-slate-500 uppercase flex items-center gap-1">
+                  <KeyRound className="h-3 w-3" /> DB 접속
+                </span>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="s_db_user" className="text-xs">사용자</Label>
+                    <Input id="s_db_user" value={formData.db_user} onChange={e => setFormData(d => ({ ...d, db_user: e.target.value }))} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="s_db_password" className="text-xs">비밀번호 {editingServer ? '(변경 시만)' : ''}</Label>
+                    <Input id="s_db_password" type="password" value={formData.db_password} onChange={e => setFormData(d => ({ ...d, db_password: e.target.value }))} />
+                  </div>
+                </div>
+              </div>
+
+              {/* 사이트 정보 */}
+              <div className="space-y-1">
+                <span className="text-xs font-semibold text-slate-500 uppercase flex items-center gap-1">
+                  <Globe className="h-3 w-3" /> 사이트 정보
+                </span>
+                <div className="space-y-1">
+                  <Label htmlFor="s_site_url" className="text-xs">사이트 URL</Label>
+                  <Input id="s_site_url" value={formData.site_url} onChange={e => setFormData(d => ({ ...d, site_url: e.target.value }))} placeholder="example.com" />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="s_site_login_id" className="text-xs">로그인 ID</Label>
+                    <Input id="s_site_login_id" value={formData.site_login_id} onChange={e => setFormData(d => ({ ...d, site_login_id: e.target.value }))} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="s_site_login_pw" className="text-xs">로그인 PW {editingServer ? '(변경 시만)' : ''}</Label>
+                    <Input id="s_site_login_pw" type="password" value={formData.site_login_pw} onChange={e => setFormData(d => ({ ...d, site_login_pw: e.target.value }))} />
+                  </div>
+                </div>
+              </div>
+
+              {/* 관리자 정보 */}
+              <div className="space-y-1">
+                <span className="text-xs font-semibold text-slate-500 uppercase flex items-center gap-1">
+                  <Shield className="h-3 w-3" /> 파트너 관리자
+                </span>
+                <div className="space-y-1">
+                  <Label htmlFor="s_admin_url" className="text-xs">관리자 URL</Label>
+                  <Input id="s_admin_url" value={formData.admin_url} onChange={e => setFormData(d => ({ ...d, admin_url: e.target.value }))} placeholder="https://admin.example.com" />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="s_admin_login_id" className="text-xs">관리자 ID</Label>
+                    <Input id="s_admin_login_id" value={formData.admin_login_id} onChange={e => setFormData(d => ({ ...d, admin_login_id: e.target.value }))} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="s_admin_login_pw" className="text-xs">관리자 PW {editingServer ? '(변경 시만)' : ''}</Label>
+                    <Input id="s_admin_login_pw" type="password" value={formData.admin_login_pw} onChange={e => setFormData(d => ({ ...d, admin_login_pw: e.target.value }))} />
+                  </div>
+                </div>
+              </div>
+
+              {/* 비고 */}
+              <div className="space-y-1">
+                <Label htmlFor="s_notes" className="text-xs">비고</Label>
+                <Textarea id="s_notes" value={formData.notes} onChange={e => setFormData(d => ({ ...d, notes: e.target.value }))} rows={2} />
+              </div>
+            </div>
+            <DialogFooter className="mt-4">
+              <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>취소</Button>
+              <Button type="submit" disabled={saving} className="bg-indigo-600 hover:bg-indigo-700">
+                {saving ? '저장 중...' : (editingServer ? '수정' : '추가')}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Dialog */}
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>서버 삭제</DialogTitle>
+            <DialogDescription>
+              '{deleteTarget?.display_name}' 서버 정보를 삭제하시겠습니까?
               이 작업은 되돌릴 수 없습니다.
             </DialogDescription>
           </DialogHeader>

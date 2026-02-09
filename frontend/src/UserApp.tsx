@@ -8,7 +8,7 @@ import { Badge } from './components/ui/badge';
 import { Label } from './components/ui/label';
 import {
   Search, Plus, FileText, Eye, MessageSquare, ArrowLeft,
-  Image as ImageIcon, Video, File, Paperclip, Bot, X,
+  Image as ImageIcon, Video, File, Paperclip, X,
   LogOut, User as UserIcon, CheckCircle, Clock, AlertTriangle, Activity
 } from 'lucide-react';
 
@@ -303,7 +303,18 @@ function UserApp({ currentUser, onLogout }: UserAppProps) {
     );
   };
 
-  // 처리 로그 타임라인 컴포넌트
+  // 사용자용 간단 상태 메시지 (AI 분석 내용 숨김)
+  const USER_STEP_MESSAGES: Record<string, string> = {
+    registered: '문의가 접수되었습니다.',
+    ai_review: '담당자가 문의 내용을 확인하고 있습니다.',
+    pending_approval: '검토가 완료되어 처리 승인을 대기하고 있습니다.',
+    ai_processing: '담당자가 요청 사항을 처리하고 있습니다.',
+    completed: '요청하신 사항의 처리가 완료되었습니다.',
+    admin_confirm: '처리 결과를 최종 확인하고 있습니다.',
+    rework: '추가 보완 작업을 진행하고 있습니다.',
+  };
+
+  // 처리 로그 타임라인 컴포넌트 (사용자용 - 간단한 상태만 표시)
   const ProcessLogsTimeline = ({ logs }: { logs: ProcessLog[] }) => {
     if (!logs || logs.length === 0) return null;
     return (
@@ -321,13 +332,8 @@ function UserApp({ currentUser, onLogout }: UserAppProps) {
                 <div className="flex items-center gap-2 mb-0.5">
                   <span className="font-medium text-gray-800">{STEP_LABELS[log.step] || log.step}</span>
                   <span className="text-xs text-gray-400">{formatDate(log.created_at)}</span>
-                  {log.creator_name && (
-                    <span className="text-xs text-gray-400">by {log.creator_name}</span>
-                  )}
                 </div>
-                {log.content && (
-                  <p className="text-gray-600 text-xs">{log.content}</p>
-                )}
+                <p className="text-gray-600 text-xs">{USER_STEP_MESSAGES[log.step] || '처리 중입니다.'}</p>
               </div>
             </div>
           ))}
@@ -606,24 +612,24 @@ function UserApp({ currentUser, onLogout }: UserAppProps) {
             ) : (
               <div className="space-y-4">
                 {comments.map((comment) => (
-                  <Card key={comment.id} className={comment.is_ai_answer ? 'border-purple-200 bg-purple-50/50' : ''}>
+                  <Card key={comment.id} className="border-slate-200">
                     <CardHeader className="pb-2">
                       <div className="flex items-center gap-2">
                         <span className="font-medium text-sm">
                           {comment.author_name}
                         </span>
-                        {comment.is_ai_answer && (
-                          <Badge variant="outline" className="text-purple-600 border-purple-300">
-                            <Bot className="h-3 w-3 mr-1" />
-                            관리자
-                          </Badge>
-                        )}
+                        <Badge variant="outline" className="text-slate-500 border-slate-300">
+                          담당자
+                        </Badge>
                         <span className="text-xs text-gray-400">{formatDate(comment.created_at)}</span>
                       </div>
                     </CardHeader>
                     <CardContent>
                       <p className="whitespace-pre-wrap text-gray-700 text-sm leading-relaxed">
-                        {comment.content}
+                        {comment.is_ai_answer
+                          ? '문의하신 내용을 확인하였습니다. 담당자가 검토 후 처리 진행하겠습니다.'
+                          : comment.content
+                        }
                       </p>
                     </CardContent>
                   </Card>
