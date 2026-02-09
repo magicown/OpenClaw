@@ -598,6 +598,12 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
     );
   }
 
+  // ─── 메인 플로우 단계 순서 ───
+  const MAIN_FLOW: WorkflowStep[] = ['registered', 'ai_review', 'pending_approval', 'ai_processing', 'completed'];
+
+  // 특정 단계가 메인 플로우에서 몇 번째인지 (0-based), 특수 상태는 -1
+  const getStepIndex = (step: WorkflowStep) => MAIN_FLOW.indexOf(step);
+
   // ─── List View ───
   return (
     <div className="space-y-4">
@@ -661,79 +667,159 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
         </CardContent>
       </Card>
 
-      {/* Process Table */}
+      {/* Process Cards */}
       {loading ? (
         <div className="flex justify-center py-12 text-gray-500">로딩 중...</div>
       ) : posts.length === 0 ? (
         <Card><CardContent className="py-12 text-center text-gray-500">게시글이 없습니다.</CardContent></Card>
       ) : (
-        <Card className="border-slate-200">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-slate-50">
-                  <th className="text-left px-4 py-3 font-medium text-slate-600 w-12">ID</th>
-                  <th className="text-left px-4 py-3 font-medium text-slate-600 w-20">카테고리</th>
-                  <th className="text-left px-4 py-3 font-medium text-slate-600">제목</th>
-                  <th className="text-left px-4 py-3 font-medium text-slate-600 w-32">작성자 / 사이트</th>
-                  <th className="text-left px-4 py-3 font-medium text-slate-600 w-28">현재 단계</th>
-                  <th className="text-left px-4 py-3 font-medium text-slate-600 w-40">최근 메모</th>
-                  <th className="text-left px-4 py-3 font-medium text-slate-600 w-32">작성일</th>
-                  <th className="text-right px-4 py-3 font-medium text-slate-600 w-44">처리</th>
-                </tr>
-              </thead>
-              <tbody>
-                {posts.map(post => {
-                  const step = (post.current_step || post.status) as WorkflowStep;
-                  const transitions = STEP_TRANSITIONS[step] || [];
-                  return (
-                    <tr key={post.id} className="border-b hover:bg-slate-50 transition-colors">
-                      <td className="px-4 py-3 text-slate-500">{post.id}</td>
-                      <td className="px-4 py-3">{getCategoryBadge(post.category)}</td>
-                      <td className="px-4 py-3">
+        <div className="space-y-3">
+          {posts.map(post => {
+            const currentStep = (post.current_step || post.status) as WorkflowStep;
+            const currentIdx = getStepIndex(currentStep);
+            const isSpecial = currentStep === 'admin_confirm' || currentStep === 'rework';
+            const transitions = STEP_TRANSITIONS[currentStep] || [];
+
+            return (
+              <Card key={post.id} className="border-slate-200 hover:shadow-lg transition-shadow">
+                <CardContent className="p-4">
+                  {/* 상단: 게시글 정보 */}
+                  <div className="flex items-start justify-between mb-4">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <span className="text-xs text-slate-400 font-mono">#{post.id}</span>
+                        {getCategoryBadge(post.category)}
                         <button
                           onClick={() => loadPostDetail(post)}
-                          className="font-medium text-slate-800 hover:text-indigo-600 hover:underline text-left"
+                          className="font-semibold text-slate-800 hover:text-indigo-600 hover:underline text-left truncate"
                         >
                           {post.title}
                         </button>
-                      </td>
-                      <td className="px-4 py-3 text-slate-600">
-                        <div className="text-sm">{post.user_display_name || post.author_name || '-'}</div>
-                        {post.user_site && <div className="text-xs text-slate-400">{post.user_site}</div>}
-                      </td>
-                      <td className="px-4 py-3">{getStepBadge(step)}</td>
-                      <td className="px-4 py-3 text-xs text-slate-500 max-w-[160px] truncate">
-                        {post.last_process_log || '-'}
-                      </td>
-                      <td className="px-4 py-3 text-slate-500 text-xs">{formatDate(post.created_at)}</td>
-                      <td className="px-4 py-3 text-right">
-                        <div className="flex justify-end gap-1 flex-wrap">
-                          {transitions.map(t => (
-                            <Button
-                              key={t.next}
-                              size="sm"
-                              variant="outline"
-                              disabled={transitioning}
-                              onClick={() => handleTransition(post.id, t.next)}
-                              className="text-xs h-7 px-2"
-                            >
-                              <ArrowRight className="h-3 w-3 mr-0.5" />
-                              {t.label}
-                            </Button>
-                          ))}
-                          {transitions.length === 0 && (
-                            <span className="text-xs text-gray-400 py-1">-</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-slate-500">
+                        <span>{post.user_display_name || '-'}</span>
+                        {post.user_site && (
+                          <span className="px-1.5 py-0.5 bg-slate-100 rounded text-[10px]">{post.user_site}</span>
+                        )}
+                        <span className="text-slate-300">|</span>
+                        <span>{formatDate(post.created_at)}</span>
+                      </div>
+                    </div>
+                    {/* 액션 버튼 */}
+                    <div className="flex gap-1 ml-3 flex-shrink-0">
+                      {transitions.map(t => (
+                        <Button
+                          key={t.next}
+                          size="sm"
+                          variant="outline"
+                          disabled={transitioning}
+                          onClick={() => handleTransition(post.id, t.next)}
+                          className="text-xs h-7 px-2.5"
+                        >
+                          <ArrowRight className="h-3 w-3 mr-0.5" />
+                          {t.label}
+                        </Button>
+                      ))}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => loadPostDetail(post)}
+                        className="text-xs h-7 px-2 text-slate-500"
+                      >
+                        상세
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* 처리 진행 박스 */}
+                  <div className="flex items-stretch gap-0 rounded-lg border border-slate-200 overflow-hidden">
+                    {MAIN_FLOW.map((step, idx) => {
+                      const cfg = STEP_CONFIG[step];
+                      const isCurrent = step === currentStep;
+                      const isPast = !isSpecial && currentIdx > idx;
+                      const isFuture = !isSpecial && !isCurrent && currentIdx < idx;
+                      // 특수 상태(admin_confirm/rework)일 때: ai_processing까지 완료된 것으로 처리
+                      const isSpecialPast = isSpecial && idx <= 3; // registered~ai_processing까지 완료
+
+                      let bgClass = '';
+                      let textClass = '';
+
+                      if (isCurrent) {
+                        // 현재 단계: 진한 색 + 강조
+                        bgClass = cfg.className.replace('border-', 'border-b-2 border-b-').replace(/bg-(\w+)-100/, 'bg-$1-200');
+                        textClass = 'font-bold';
+                      } else if (isPast || isSpecialPast) {
+                        // 완료된 단계: 색상 있음
+                        bgClass = cfg.className;
+                        textClass = 'font-medium';
+                      } else if (isFuture) {
+                        // 미래 단계: 회색
+                        bgClass = 'bg-slate-50 text-slate-300 border-slate-100';
+                        textClass = '';
+                      } else {
+                        bgClass = 'bg-slate-50 text-slate-300 border-slate-100';
+                        textClass = '';
+                      }
+
+                      return (
+                        <div
+                          key={step}
+                          className={`flex-1 flex flex-col items-center justify-center py-2.5 px-1 relative ${bgClass} ${
+                            isCurrent ? 'ring-2 ring-inset ring-indigo-400 z-10' : ''
+                          }`}
+                        >
+                          {/* 아이콘 */}
+                          <div className={`mb-0.5 ${textClass}`}>
+                            {isPast || isSpecialPast ? (
+                              <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                            ) : isCurrent ? (
+                              <div className="relative">
+                                <div className="h-4 w-4">{cfg.icon}</div>
+                                <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
+                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                                  <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="h-4 w-4 rounded-full border-2 border-slate-200" />
+                            )}
+                          </div>
+                          {/* 라벨 */}
+                          <span className={`text-[10px] leading-tight text-center ${textClass}`}>
+                            {cfg.label}
+                          </span>
+                          {/* 화살표 (마지막 제외) */}
+                          {idx < MAIN_FLOW.length - 1 && (
+                            <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 z-20">
+                              <ArrowRight className={`h-3 w-3 ${isPast || isSpecialPast ? 'text-emerald-400' : 'text-slate-200'}`} />
+                            </div>
                           )}
                         </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </Card>
+                      );
+                    })}
+                  </div>
+
+                  {/* 특수 상태 표시 (admin_confirm / rework) */}
+                  {isSpecial && (
+                    <div className={`mt-2 flex items-center gap-2 px-3 py-1.5 rounded-md border ${STEP_CONFIG[currentStep].className}`}>
+                      {STEP_CONFIG[currentStep].icon}
+                      <span className="text-xs font-semibold">{STEP_CONFIG[currentStep].label}</span>
+                      <span className="text-xs opacity-70">- {post.last_process_log || '처리 중'}</span>
+                    </div>
+                  )}
+
+                  {/* 최근 메모 (특수 상태가 아닌 경우) */}
+                  {!isSpecial && post.last_process_log && (
+                    <div className="mt-2 text-xs text-slate-500 truncate">
+                      <Clock className="h-3 w-3 inline mr-1" />
+                      {post.last_process_log}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
       )}
     </div>
   );
