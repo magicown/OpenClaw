@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { postsApi, commentsApi, uploadApi, type Post, type Comment, type Attachment, type User } from './lib/api';
+import { postsApi, uploadApi, type Post, type Comment, type User, type ProcessLog } from './lib/api';
 import { Button } from './components/ui/button';
 import { Input } from './components/ui/input';
 import { Textarea } from './components/ui/textarea';
@@ -9,7 +9,7 @@ import { Label } from './components/ui/label';
 import {
   Search, Plus, FileText, Eye, MessageSquare, ArrowLeft,
   Image as ImageIcon, Video, File, Paperclip, Bot, X,
-  LogOut, User as UserIcon
+  LogOut, User as UserIcon, CheckCircle, Clock, AlertTriangle, Activity
 } from 'lucide-react';
 
 type View = 'list' | 'detail' | 'create';
@@ -43,6 +43,7 @@ function UserApp({ currentUser, onLogout }: UserAppProps) {
         page,
         limit: 10,
         search: searchTerm || undefined,
+        mine: true,
       });
       setPosts(response.data);
       setTotalPages(response.pagination.totalPages);
@@ -128,13 +129,25 @@ function UserApp({ currentUser, onLogout }: UserAppProps) {
   };
 
   const getStatusBadge = (status: string) => {
-    const variants: Record<string, { text: string; variant: 'default' | 'secondary' | 'destructive' | 'outline' }> = {
-      pending: { text: '대기 중', variant: 'secondary' },
-      answered: { text: '답변 완료', variant: 'default' },
-      closed: { text: '종료', variant: 'destructive' },
+    const statusMap: Record<string, { text: string; className: string }> = {
+      registered: { text: '문의 등록', className: 'bg-blue-100 text-blue-700 border-blue-300' },
+      ai_review: { text: 'AI 확인 중', className: 'bg-purple-100 text-purple-700 border-purple-300' },
+      pending_approval: { text: '승인 대기', className: 'bg-amber-100 text-amber-700 border-amber-300' },
+      ai_processing: { text: 'AI 작업 중', className: 'bg-cyan-100 text-cyan-700 border-cyan-300' },
+      completed: { text: '완료', className: 'bg-green-100 text-green-700 border-green-300' },
+      admin_confirm: { text: '관리자 컨펌', className: 'bg-indigo-100 text-indigo-700 border-indigo-300' },
+      rework: { text: '재작업', className: 'bg-red-100 text-red-700 border-red-300' },
+      // Legacy statuses for backward compatibility
+      pending: { text: '대기 중', className: 'bg-gray-100 text-gray-700 border-gray-300' },
+      answered: { text: '답변 완료', className: 'bg-green-100 text-green-700 border-green-300' },
+      closed: { text: '종료', className: 'bg-red-100 text-red-700 border-red-300' },
     };
-    const { text, variant } = variants[status] || variants.pending;
-    return <Badge variant={variant}>{text}</Badge>;
+    const { text, className } = statusMap[status] || statusMap.registered;
+    return (
+      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${className}`}>
+        {text}
+      </span>
+    );
   };
 
   const getCategoryBadge = (category: string) => {
@@ -174,6 +187,153 @@ function UserApp({ currentUser, onLogout }: UserAppProps) {
       case 'video': return <Video className="h-4 w-4" />;
       default: return <File className="h-4 w-4" />;
     }
+  };
+
+  // 처리 단계 진행 표시 컴포넌트
+  const MAIN_STEPS = ['registered', 'ai_review', 'pending_approval', 'ai_processing', 'completed'] as const;
+  const STEP_LABELS: Record<string, string> = {
+    registered: '문의 등록',
+    ai_review: 'AI 확인',
+    pending_approval: '승인 대기',
+    ai_processing: 'AI 작업 중',
+    completed: '완료',
+    admin_confirm: '관리자 컨펌',
+    rework: '재작업',
+  };
+
+  const ProcessStepIndicator = ({ status, compact = false }: { status: string; compact?: boolean }) => {
+    const isSpecialStatus = status === 'admin_confirm' || status === 'rework';
+    const currentMainIndex = MAIN_STEPS.indexOf(status as typeof MAIN_STEPS[number]);
+
+    if (compact) {
+      return (
+        <div className="flex items-center gap-1 mt-2">
+          {isSpecialStatus ? (
+            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
+              status === 'admin_confirm'
+                ? 'bg-indigo-100 text-indigo-700'
+                : 'bg-red-100 text-red-700'
+            }`}>
+              {status === 'admin_confirm' ? <AlertTriangle className="h-3 w-3" /> : <Activity className="h-3 w-3" />}
+              {STEP_LABELS[status]}
+            </span>
+          ) : (
+            MAIN_STEPS.map((step, index) => {
+              const isCompleted = currentMainIndex > index;
+              const isCurrent = currentMainIndex === index;
+              return (
+                <div key={step} className="flex items-center">
+                  <div
+                    className={`w-2.5 h-2.5 rounded-full ${
+                      isCompleted
+                        ? 'bg-blue-500'
+                        : isCurrent
+                        ? 'bg-blue-500 ring-2 ring-blue-200 ring-offset-1'
+                        : 'bg-gray-300'
+                    }`}
+                    title={STEP_LABELS[step]}
+                  />
+                  {index < MAIN_STEPS.length - 1 && (
+                    <div className={`w-4 h-0.5 ${isCompleted ? 'bg-blue-500' : 'bg-gray-300'}`} />
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      );
+    }
+
+    // Full-size version for detail view
+    return (
+      <div className="w-full">
+        {isSpecialStatus ? (
+          <div className="flex items-center justify-center py-3">
+            <span className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold ${
+              status === 'admin_confirm'
+                ? 'bg-indigo-100 text-indigo-700 border border-indigo-300'
+                : 'bg-red-100 text-red-700 border border-red-300'
+            }`}>
+              {status === 'admin_confirm' ? <AlertTriangle className="h-4 w-4" /> : <Activity className="h-4 w-4" />}
+              {STEP_LABELS[status]}
+            </span>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between w-full">
+            {MAIN_STEPS.map((step, index) => {
+              const isCompleted = currentMainIndex > index;
+              const isCurrent = currentMainIndex === index;
+              return (
+                <div key={step} className="flex items-center flex-1 last:flex-none">
+                  <div className="flex flex-col items-center">
+                    <div
+                      className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium transition-all ${
+                        isCompleted
+                          ? 'bg-blue-500 text-white'
+                          : isCurrent
+                          ? 'bg-blue-500 text-white ring-4 ring-blue-100'
+                          : 'bg-gray-200 text-gray-500'
+                      }`}
+                    >
+                      {isCompleted ? (
+                        <CheckCircle className="h-4 w-4" />
+                      ) : isCurrent ? (
+                        <Clock className="h-4 w-4" />
+                      ) : (
+                        index + 1
+                      )}
+                    </div>
+                    <span className={`mt-1.5 text-xs text-center whitespace-nowrap ${
+                      isCompleted || isCurrent ? 'text-blue-600 font-medium' : 'text-gray-400'
+                    }`}>
+                      {STEP_LABELS[step]}
+                    </span>
+                  </div>
+                  {index < MAIN_STEPS.length - 1 && (
+                    <div className={`flex-1 h-0.5 mx-2 mt-[-1rem] ${
+                      isCompleted ? 'bg-blue-500' : 'bg-gray-200'
+                    }`} />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // 처리 로그 타임라인 컴포넌트
+  const ProcessLogsTimeline = ({ logs }: { logs: ProcessLog[] }) => {
+    if (!logs || logs.length === 0) return null;
+    return (
+      <div className="mt-4">
+        <h4 className="text-sm font-medium text-gray-500 mb-3 flex items-center gap-1">
+          <Activity className="h-4 w-4" />
+          처리 이력
+        </h4>
+        <div className="relative pl-6 space-y-4">
+          <div className="absolute left-2 top-1 bottom-1 w-0.5 bg-gray-200" />
+          {logs.map((log) => (
+            <div key={log.id} className="relative">
+              <div className="absolute -left-4 top-1 w-3 h-3 rounded-full bg-blue-400 border-2 border-white" />
+              <div className="text-sm">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className="font-medium text-gray-800">{STEP_LABELS[log.step] || log.step}</span>
+                  <span className="text-xs text-gray-400">{formatDate(log.created_at)}</span>
+                  {log.creator_name && (
+                    <span className="text-xs text-gray-400">by {log.creator_name}</span>
+                  )}
+                </div>
+                {log.content && (
+                  <p className="text-gray-600 text-xs">{log.content}</p>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
   };
 
   // 게시글 작성 폼
@@ -350,29 +510,81 @@ function UserApp({ currentUser, onLogout }: UserAppProps) {
               </div>
             </CardHeader>
             <CardContent>
+              {/* 처리 단계 진행 표시 */}
+              <div className="mb-6 p-4 bg-gray-50 rounded-lg">
+                <ProcessStepIndicator status={selectedPost.status} />
+              </div>
+
               <div className="whitespace-pre-wrap text-gray-700 leading-relaxed">
                 {selectedPost.content}
               </div>
 
-              {/* 첨부파일 */}
+              {/* 첨부파일 - 이미지/비디오 인라인 미리보기 */}
               {selectedPost.attachments && selectedPost.attachments.length > 0 && (
                 <div className="mt-6 pt-4 border-t">
                   <h4 className="text-sm font-medium text-gray-500 mb-3">첨부파일</h4>
-                  <div className="space-y-2">
-                    {selectedPost.attachments.map((attachment) => (
-                      <a
-                        key={attachment.id}
-                        href={`/uploads/${attachment.file_path.split('/').pop()}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-2 p-2 bg-gray-50 rounded-md hover:bg-gray-100 text-sm"
-                      >
-                        {getFileIcon(attachment.file_type)}
-                        <span className="text-blue-600 hover:underline">{attachment.file_name}</span>
-                        <span className="text-gray-400">({formatFileSize(attachment.file_size)})</span>
-                      </a>
-                    ))}
+                  <div className="space-y-4">
+                    {selectedPost.attachments.map((attachment) => {
+                      const fileUrl = `/uploads/${attachment.file_path.split('/').pop()}`;
+                      if (attachment.file_type === 'image') {
+                        return (
+                          <div key={attachment.id} className="space-y-1">
+                            <a href={fileUrl} target="_blank" rel="noopener noreferrer">
+                              <img
+                                src={fileUrl}
+                                alt={attachment.file_name}
+                                className="max-w-full rounded-lg border shadow-sm hover:shadow-md transition-shadow cursor-pointer"
+                              />
+                            </a>
+                            <div className="flex items-center gap-2 text-xs text-gray-400">
+                              {getFileIcon(attachment.file_type)}
+                              <span>{attachment.file_name}</span>
+                              <span>({formatFileSize(attachment.file_size)})</span>
+                            </div>
+                          </div>
+                        );
+                      }
+                      if (attachment.file_type === 'video') {
+                        return (
+                          <div key={attachment.id} className="space-y-1">
+                            <video
+                              src={fileUrl}
+                              controls
+                              className="max-w-full rounded-lg border shadow-sm"
+                            >
+                              브라우저가 비디오 재생을 지원하지 않습니다.
+                            </video>
+                            <div className="flex items-center gap-2 text-xs text-gray-400">
+                              {getFileIcon(attachment.file_type)}
+                              <span>{attachment.file_name}</span>
+                              <span>({formatFileSize(attachment.file_size)})</span>
+                            </div>
+                          </div>
+                        );
+                      }
+                      // document type - download link
+                      return (
+                        <a
+                          key={attachment.id}
+                          href={fileUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2 p-2 bg-gray-50 rounded-md hover:bg-gray-100 text-sm"
+                        >
+                          {getFileIcon(attachment.file_type)}
+                          <span className="text-blue-600 hover:underline">{attachment.file_name}</span>
+                          <span className="text-gray-400">({formatFileSize(attachment.file_size)})</span>
+                        </a>
+                      );
+                    })}
                   </div>
+                </div>
+              )}
+
+              {/* 처리 이력 타임라인 */}
+              {selectedPost.process_logs && selectedPost.process_logs.length > 0 && (
+                <div className="mt-6 pt-4 border-t">
+                  <ProcessLogsTimeline logs={selectedPost.process_logs} />
                 </div>
               )}
             </CardContent>
@@ -520,6 +732,7 @@ function UserApp({ currentUser, onLogout }: UserAppProps) {
                           </span>
                         )}
                       </CardDescription>
+                      <ProcessStepIndicator status={post.status} compact />
                     </div>
                   </div>
                 </CardHeader>

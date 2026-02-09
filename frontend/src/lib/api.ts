@@ -8,7 +8,7 @@ export interface Post {
   category: '긴급' | '오류' | '건의' | '추가개발' | '기타';
   user_display_name?: string;
   user_site?: string;
-  status: 'pending' | 'answered' | 'closed';
+  status: 'registered' | 'ai_review' | 'pending_approval' | 'ai_processing' | 'completed' | 'admin_confirm' | 'rework';
   view_count: number;
   created_at: string;
   updated_at: string;
@@ -16,6 +16,17 @@ export interface Post {
   attachment_count: number;
   comments?: Comment[];
   attachments?: Attachment[];
+  process_logs?: ProcessLog[];
+}
+
+export interface ProcessLog {
+  id: number;
+  post_id: number;
+  step: 'registered' | 'ai_review' | 'pending_approval' | 'ai_processing' | 'completed' | 'admin_confirm' | 'rework';
+  content: string;
+  created_by: number | null;
+  creator_name: string | null;
+  created_at: string;
 }
 
 export interface Comment {
@@ -91,12 +102,13 @@ export const authApi = {
 // 게시글 API
 export const postsApi = {
   // 게시글 목록 조회
-  list: async (params?: { page?: number; limit?: number; status?: string; search?: string }) => {
+  list: async (params?: { page?: number; limit?: number; status?: string; search?: string; mine?: boolean }) => {
     const queryParams = new URLSearchParams();
     if (params?.page) queryParams.append('page', params.page.toString());
     if (params?.limit) queryParams.append('limit', params.limit.toString());
     if (params?.status) queryParams.append('status', params.status);
     if (params?.search) queryParams.append('search', params.search);
+    if (params?.mine) queryParams.append('mine', '1');
 
     const response = await fetch(`${API_BASE_URL}/posts.php?${queryParams.toString()}`);
     if (!response.ok) throw new Error('Failed to fetch posts');
@@ -203,6 +215,38 @@ export const adminApi = {
       if (!response.ok) throw new Error('Failed to delete user');
       return response.json();
     },
+  },
+};
+
+// 처리절차 API
+export const processApi = {
+  // 특정 게시글의 프로세스 로그 조회
+  getLogs: async (postId: number) => {
+    const response = await fetch(`${API_BASE_URL}/process.php?post_id=${postId}`);
+    if (!response.ok) throw new Error('Failed to fetch process logs');
+    return response.json() as Promise<ProcessLog[]>;
+  },
+
+  // 전체 처리절차 대시보드 (관리자)
+  dashboard: async (params?: { step?: string; category?: string }) => {
+    const queryParams = new URLSearchParams();
+    if (params?.step) queryParams.append('step', params.step);
+    if (params?.category) queryParams.append('category', params.category);
+
+    const response = await fetch(`${API_BASE_URL}/process.php?${queryParams.toString()}`);
+    if (!response.ok) throw new Error('Failed to fetch process dashboard');
+    return response.json();
+  },
+
+  // 상태 전이 (관리자)
+  transition: async (data: { post_id: number; step: string; content?: string }) => {
+    const response = await fetch(`${API_BASE_URL}/process.php`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) throw new Error('Failed to transition process');
+    return response.json();
   },
 };
 

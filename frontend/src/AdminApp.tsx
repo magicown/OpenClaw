@@ -16,7 +16,9 @@ import {
 import {
   Search, MessageSquare, Eye, Send, Trash2, Bot,
   LogOut, User as UserIcon, Users, LayoutDashboard,
-  Plus, ChevronDown, ArrowLeft, Shield
+  Plus, ChevronDown, ArrowLeft, Shield,
+  ClipboardList, ArrowRight, Clock, CheckCircle2, Activity,
+  RotateCcw, Cpu, FileCheck, X
 } from 'lucide-react';
 
 const API_BASE = '/api';
@@ -46,7 +48,7 @@ interface Post {
   title: string;
   content: string;
   category: string;
-  status: 'pending' | 'answered' | 'closed';
+  status: string;
   view_count: number;
   author_name: string;
   created_at: string;
@@ -79,11 +81,70 @@ interface AdminAppProps {
   onLogout: () => void;
 }
 
-type Tab = 'board' | 'users';
+type Tab = 'process' | 'board' | 'users';
 type BoardView = 'list' | 'detail';
 
+// Workflow step types
+type WorkflowStep = 'registered' | 'ai_review' | 'pending_approval' | 'ai_processing' | 'completed' | 'admin_confirm' | 'rework';
+
+interface ProcessPost {
+  id: number;
+  user_id: number;
+  title: string;
+  content: string;
+  category: string;
+  status: string;
+  current_step: WorkflowStep;
+  view_count: number;
+  author_name: string;
+  user_display_name?: string;
+  user_site?: string;
+  created_at: string;
+  updated_at: string;
+  comment_count: number;
+  attachment_count: number;
+  last_process_log?: string;
+  comments?: Comment[];
+  attachments?: Attachment[];
+}
+
+interface ProcessLog {
+  id: number;
+  post_id: number;
+  step: WorkflowStep;
+  content: string;
+  created_by: string;
+  created_at: string;
+}
+
+const STEP_CONFIG: Record<WorkflowStep, { label: string; className: string; icon: React.ReactNode }> = {
+  registered: { label: '문의 등록', className: 'bg-blue-100 text-blue-700 border-blue-200', icon: <FileCheck className="h-3 w-3" /> },
+  ai_review: { label: 'AI 확인', className: 'bg-purple-100 text-purple-700 border-purple-200', icon: <Cpu className="h-3 w-3" /> },
+  pending_approval: { label: '승인 대기', className: 'bg-amber-100 text-amber-700 border-amber-200', icon: <Clock className="h-3 w-3" /> },
+  ai_processing: { label: 'AI 작업 중', className: 'bg-cyan-100 text-cyan-700 border-cyan-200', icon: <Activity className="h-3 w-3" /> },
+  completed: { label: '완료', className: 'bg-emerald-100 text-emerald-700 border-emerald-200', icon: <CheckCircle2 className="h-3 w-3" /> },
+  admin_confirm: { label: '관리자 컨펌', className: 'bg-indigo-100 text-indigo-700 border-indigo-200', icon: <Shield className="h-3 w-3" /> },
+  rework: { label: '재작업', className: 'bg-red-100 text-red-700 border-red-200', icon: <RotateCcw className="h-3 w-3" /> },
+};
+
+const STEP_TRANSITIONS: Record<WorkflowStep, { label: string; next: WorkflowStep }[]> = {
+  registered: [{ label: 'AI 확인 시작', next: 'ai_review' }],
+  ai_review: [{ label: '승인 요청', next: 'pending_approval' }],
+  pending_approval: [{ label: '승인 (AI 작업 시작)', next: 'ai_processing' }],
+  ai_processing: [
+    { label: '작업 완료', next: 'completed' },
+    { label: '관리자 컨펌 필요', next: 'admin_confirm' },
+  ],
+  completed: [],
+  admin_confirm: [
+    { label: '완료 처리', next: 'completed' },
+    { label: '재작업 요청', next: 'rework' },
+  ],
+  rework: [{ label: 'AI 재작업 시작', next: 'ai_processing' }],
+};
+
 export default function AdminApp({ currentUser, onLogout }: AdminAppProps) {
-  const [activeTab, setActiveTab] = useState<Tab>('board');
+  const [activeTab, setActiveTab] = useState<Tab>('process');
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -122,6 +183,17 @@ export default function AdminApp({ currentUser, onLogout }: AdminAppProps) {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <nav className="flex gap-1">
             <button
+              onClick={() => setActiveTab('process')}
+              className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'process'
+                  ? 'border-white text-white'
+                  : 'border-transparent text-indigo-300 hover:text-white hover:border-indigo-400'
+              }`}
+            >
+              <ClipboardList className="h-4 w-4 inline mr-1.5 -mt-0.5" />
+              처리절차
+            </button>
+            <button
               onClick={() => setActiveTab('board')}
               className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
                 activeTab === 'board'
@@ -149,12 +221,520 @@ export default function AdminApp({ currentUser, onLogout }: AdminAppProps) {
 
       {/* Content */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {activeTab === 'board' ? (
+        {activeTab === 'process' ? (
+          <ProcessManagement currentUser={currentUser} />
+        ) : activeTab === 'board' ? (
           <BoardManagement currentUser={currentUser} />
         ) : (
           <UserManagement currentUser={currentUser} />
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── Process Management ───────────────────────────────────────
+
+function ProcessManagement({ currentUser }: { currentUser: User }) {
+  const [posts, setPosts] = useState<ProcessPost[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [stepFilter, setStepFilter] = useState<WorkflowStep | ''>('');
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [stepCounts, setStepCounts] = useState<Record<WorkflowStep, number>>({
+    registered: 0, ai_review: 0, pending_approval: 0, ai_processing: 0,
+    completed: 0, admin_confirm: 0, rework: 0,
+  });
+
+  // Detail view
+  const [selectedPost, setSelectedPost] = useState<ProcessPost | null>(null);
+  const [processLogs, setProcessLogs] = useState<ProcessLog[]>([]);
+  const [detailComments, setDetailComments] = useState<Comment[]>([]);
+  const [showDetail, setShowDetail] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  // Transition
+  const [transitionContent, setTransitionContent] = useState('');
+  const [transitioning, setTransitioning] = useState(false);
+
+  // Comment
+  const [commentContent, setCommentContent] = useState('');
+  const [commentSubmitting, setCommentSubmitting] = useState(false);
+
+  const loadPosts = useCallback(async () => {
+    try {
+      setLoading(true);
+      const params = new URLSearchParams();
+      if (stepFilter) params.append('step', stepFilter);
+      if (categoryFilter) params.append('category', categoryFilter);
+
+      const res = await fetch(`${API_BASE}/process.php?${params}`);
+      const data = await res.json();
+      const items: ProcessPost[] = data.data || data || [];
+      setPosts(items);
+
+      // Compute counts from all posts (unfiltered) or from response
+      if (data.counts) {
+        setStepCounts(data.counts);
+      } else {
+        // Compute from loaded data when no filter applied
+        if (!stepFilter && !categoryFilter) {
+          const counts: Record<string, number> = {};
+          for (const step of Object.keys(STEP_CONFIG)) counts[step] = 0;
+          items.forEach(p => {
+            const step = p.current_step || p.status;
+            if (counts[step] !== undefined) counts[step]++;
+          });
+          setStepCounts(counts as Record<WorkflowStep, number>);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load process posts:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [stepFilter, categoryFilter]);
+
+  useEffect(() => { loadPosts(); }, [loadPosts]);
+
+  const loadPostDetail = async (post: ProcessPost) => {
+    try {
+      setDetailLoading(true);
+      setSelectedPost(post);
+      setShowDetail(true);
+      setTransitionContent('');
+
+      // Load process logs
+      const logsRes = await fetch(`${API_BASE}/process.php?post_id=${post.id}`);
+      const logsData = await logsRes.json();
+      setProcessLogs(logsData.logs || logsData || []);
+
+      // Load comments
+      const commentsRes = await fetch(`${API_BASE}/comments.php?post_id=${post.id}`);
+      const commentsData = await commentsRes.json();
+      setDetailComments(Array.isArray(commentsData) ? commentsData : commentsData.data || []);
+    } catch (err) {
+      console.error('Failed to load post detail:', err);
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const handleTransition = async (postId: number, nextStep: WorkflowStep) => {
+    try {
+      setTransitioning(true);
+      await fetch(`${API_BASE}/process.php`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          post_id: postId,
+          step: nextStep,
+          content: transitionContent || undefined,
+        }),
+      });
+      setTransitionContent('');
+
+      // Reload
+      await loadPosts();
+      if (selectedPost && selectedPost.id === postId) {
+        // Reload detail
+        const updated = { ...selectedPost, current_step: nextStep, status: nextStep };
+        setSelectedPost(updated);
+        const logsRes = await fetch(`${API_BASE}/process.php?post_id=${postId}`);
+        const logsData = await logsRes.json();
+        setProcessLogs(logsData.logs || logsData || []);
+      }
+    } catch (err) {
+      console.error('Failed to transition step:', err);
+    } finally {
+      setTransitioning(false);
+    }
+  };
+
+  const handleCreateComment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedPost || !commentContent.trim()) return;
+    try {
+      setCommentSubmitting(true);
+      await fetch(`${API_BASE}/comments.php`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          post_id: selectedPost.id,
+          content: commentContent,
+          author_name: currentUser.display_name,
+        }),
+      });
+      setCommentContent('');
+      const res = await fetch(`${API_BASE}/comments.php?post_id=${selectedPost.id}`);
+      const data = await res.json();
+      setDetailComments(Array.isArray(data) ? data : data.data || []);
+    } catch (err) {
+      console.error('Failed to create comment:', err);
+    } finally {
+      setCommentSubmitting(false);
+    }
+  };
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('ko-KR', {
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit',
+    });
+  };
+
+  const getStepBadge = (step: WorkflowStep) => {
+    const cfg = STEP_CONFIG[step];
+    if (!cfg) return <span className="text-xs text-gray-500">{step}</span>;
+    return (
+      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${cfg.className}`}>
+        {cfg.icon}
+        {cfg.label}
+      </span>
+    );
+  };
+
+  const getCategoryBadge = (category: string) => {
+    const map: Record<string, string> = {
+      '긴급': 'bg-red-100 text-red-700 border-red-200',
+      '오류': 'bg-orange-100 text-orange-700 border-orange-200',
+      '건의': 'bg-blue-100 text-blue-700 border-blue-200',
+      '추가개발': 'bg-purple-100 text-purple-700 border-purple-200',
+      '기타': 'bg-gray-100 text-gray-700 border-gray-200',
+    };
+    const cls = map[category] || map['기타'];
+    return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${cls}`}>{category}</span>;
+  };
+
+  // ─── Detail Modal ───
+  if (showDetail && selectedPost) {
+    const currentStep = (selectedPost.current_step || selectedPost.status) as WorkflowStep;
+    const transitions = STEP_TRANSITIONS[currentStep] || [];
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-3">
+          <Button variant="ghost" size="sm" onClick={() => { setShowDetail(false); setSelectedPost(null); }}>
+            <ArrowLeft className="h-4 w-4 mr-1" />
+            목록으로
+          </Button>
+          <span className="text-sm text-gray-500">처리절차 상세</span>
+        </div>
+
+        {detailLoading ? (
+          <div className="flex justify-center py-12 text-gray-500">로딩 중...</div>
+        ) : (
+          <>
+            {/* Post Info */}
+            <Card className="border-slate-200">
+              <CardHeader>
+                <div className="flex items-start justify-between">
+                  <div className="flex-1 space-y-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {getCategoryBadge(selectedPost.category)}
+                      {getStepBadge(currentStep)}
+                    </div>
+                    <CardTitle className="text-xl">{selectedPost.title}</CardTitle>
+                    <CardDescription className="flex items-center gap-3 text-sm">
+                      <span>{selectedPost.user_display_name || selectedPost.author_name || '-'}</span>
+                      {selectedPost.user_site && (
+                        <>
+                          <span className="text-slate-300">|</span>
+                          <span className="text-slate-500">{selectedPost.user_site}</span>
+                        </>
+                      )}
+                      <span className="text-slate-300">|</span>
+                      <span>{formatDate(selectedPost.created_at)}</span>
+                    </CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="whitespace-pre-wrap text-gray-700 leading-relaxed">
+                  {selectedPost.content}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Process Timeline */}
+            <Card className="border-slate-200">
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Clock className="h-4 w-4 text-indigo-600" />
+                  처리 이력
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {processLogs.length === 0 ? (
+                  <p className="text-sm text-gray-500 text-center py-4">처리 이력이 없습니다.</p>
+                ) : (
+                  <div className="relative">
+                    <div className="absolute left-4 top-0 bottom-0 w-0.5 bg-slate-200" />
+                    <div className="space-y-4">
+                      {processLogs.map((log, idx) => (
+                        <div key={log.id || idx} className="relative pl-10">
+                          <div className="absolute left-2.5 top-1 w-3 h-3 rounded-full bg-white border-2 border-indigo-400" />
+                          <div className="bg-slate-50 rounded-lg p-3 border border-slate-100">
+                            <div className="flex items-center gap-2 mb-1">
+                              {getStepBadge(log.step)}
+                              <span className="text-xs text-gray-400">{formatDate(log.created_at)}</span>
+                              <span className="text-xs text-gray-500">by {log.created_by}</span>
+                            </div>
+                            {log.content && (
+                              <p className="text-sm text-gray-700 mt-1">{log.content}</p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Status Transition Actions */}
+            {transitions.length > 0 && (
+              <Card className="border-indigo-200 bg-indigo-50/30">
+                <CardHeader>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <ArrowRight className="h-4 w-4 text-indigo-600" />
+                    단계 전환
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <Textarea
+                    value={transitionContent}
+                    onChange={e => setTransitionContent(e.target.value)}
+                    placeholder="메모 입력 (선택사항)"
+                    rows={2}
+                    className="bg-white"
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    {transitions.map(t => {
+                      const nextCfg = STEP_CONFIG[t.next];
+                      return (
+                        <Button
+                          key={t.next}
+                          size="sm"
+                          disabled={transitioning}
+                          onClick={() => handleTransition(selectedPost.id, t.next)}
+                          className={`${nextCfg.className} border hover:opacity-80`}
+                          variant="outline"
+                        >
+                          <ArrowRight className="h-3 w-3 mr-1" />
+                          {t.label}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Comments */}
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                <MessageSquare className="h-5 w-5" />
+                답변 ({detailComments.length})
+              </h3>
+
+              {detailComments.length === 0 ? (
+                <Card><CardContent className="py-6 text-center text-gray-500">아직 답변이 없습니다.</CardContent></Card>
+              ) : (
+                <div className="space-y-3">
+                  {detailComments.map(comment => (
+                    <Card key={comment.id} className={comment.is_ai_answer ? 'border-purple-200 bg-purple-50/50' : ''}>
+                      <CardHeader className="pb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-sm">{comment.author_name}</span>
+                          {comment.is_ai_answer && (
+                            <Badge variant="outline" className="text-purple-600 border-purple-300">
+                              <Bot className="h-3 w-3 mr-1" />AI
+                            </Badge>
+                          )}
+                          <span className="text-xs text-gray-400">{formatDate(comment.created_at)}</span>
+                        </div>
+                      </CardHeader>
+                      <CardContent>
+                        <p className="whitespace-pre-wrap text-gray-700 text-sm leading-relaxed">{comment.content}</p>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Write Comment */}
+            <Card className="border-indigo-200">
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Shield className="h-4 w-4 text-indigo-600" />
+                  관리자 답변 작성
+                </CardTitle>
+              </CardHeader>
+              <form onSubmit={handleCreateComment}>
+                <CardContent className="space-y-3">
+                  <div className="text-sm text-gray-500">
+                    작성자: <span className="font-medium text-gray-700">{currentUser.display_name}</span>
+                  </div>
+                  <Textarea
+                    value={commentContent}
+                    onChange={e => setCommentContent(e.target.value)}
+                    placeholder="답변을 작성해주세요"
+                    rows={4}
+                    required
+                  />
+                </CardContent>
+                <CardFooter className="flex justify-end">
+                  <Button type="submit" disabled={commentSubmitting} className="bg-indigo-600 hover:bg-indigo-700">
+                    <Send className="h-4 w-4 mr-1" />
+                    {commentSubmitting ? '등록 중...' : '답변 등록'}
+                  </Button>
+                </CardFooter>
+              </form>
+            </Card>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  // ─── List View ───
+  return (
+    <div className="space-y-4">
+      {/* Dashboard Summary */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+        {(Object.keys(STEP_CONFIG) as WorkflowStep[]).map(step => {
+          const cfg = STEP_CONFIG[step];
+          const count = stepCounts[step] || 0;
+          const isActive = stepFilter === step;
+          return (
+            <button
+              key={step}
+              onClick={() => setStepFilter(isActive ? '' : step)}
+              className={`rounded-lg border p-3 text-center transition-all hover:shadow-md ${
+                isActive ? 'ring-2 ring-indigo-400 shadow-md' : ''
+              } ${cfg.className}`}
+            >
+              <div className="text-2xl font-bold">{count}</div>
+              <div className="text-xs font-medium mt-1 flex items-center justify-center gap-1">
+                {cfg.icon}
+                {cfg.label}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Filters */}
+      <Card className="border-slate-200">
+        <CardContent className="pt-4 pb-4">
+          <div className="flex flex-wrap gap-3 items-end">
+            <select
+              value={stepFilter}
+              onChange={e => setStepFilter(e.target.value as WorkflowStep | '')}
+              className="h-10 px-3 rounded-md border border-input bg-background text-sm"
+            >
+              <option value="">전체 단계</option>
+              {(Object.keys(STEP_CONFIG) as WorkflowStep[]).map(step => (
+                <option key={step} value={step}>{STEP_CONFIG[step].label}</option>
+              ))}
+            </select>
+            <select
+              value={categoryFilter}
+              onChange={e => setCategoryFilter(e.target.value)}
+              className="h-10 px-3 rounded-md border border-input bg-background text-sm"
+            >
+              <option value="">전체 카테고리</option>
+              <option value="긴급">긴급</option>
+              <option value="오류">오류</option>
+              <option value="건의">건의</option>
+              <option value="추가개발">추가개발</option>
+              <option value="기타">기타</option>
+            </select>
+            {(stepFilter || categoryFilter) && (
+              <Button variant="ghost" size="sm" onClick={() => { setStepFilter(''); setCategoryFilter(''); }}>
+                <X className="h-4 w-4 mr-1" />
+                필터 초기화
+              </Button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Process Table */}
+      {loading ? (
+        <div className="flex justify-center py-12 text-gray-500">로딩 중...</div>
+      ) : posts.length === 0 ? (
+        <Card><CardContent className="py-12 text-center text-gray-500">게시글이 없습니다.</CardContent></Card>
+      ) : (
+        <Card className="border-slate-200">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-slate-50">
+                  <th className="text-left px-4 py-3 font-medium text-slate-600 w-12">ID</th>
+                  <th className="text-left px-4 py-3 font-medium text-slate-600 w-20">카테고리</th>
+                  <th className="text-left px-4 py-3 font-medium text-slate-600">제목</th>
+                  <th className="text-left px-4 py-3 font-medium text-slate-600 w-32">작성자 / 사이트</th>
+                  <th className="text-left px-4 py-3 font-medium text-slate-600 w-28">현재 단계</th>
+                  <th className="text-left px-4 py-3 font-medium text-slate-600 w-40">최근 메모</th>
+                  <th className="text-left px-4 py-3 font-medium text-slate-600 w-32">작성일</th>
+                  <th className="text-right px-4 py-3 font-medium text-slate-600 w-44">처리</th>
+                </tr>
+              </thead>
+              <tbody>
+                {posts.map(post => {
+                  const step = (post.current_step || post.status) as WorkflowStep;
+                  const transitions = STEP_TRANSITIONS[step] || [];
+                  return (
+                    <tr key={post.id} className="border-b hover:bg-slate-50 transition-colors">
+                      <td className="px-4 py-3 text-slate-500">{post.id}</td>
+                      <td className="px-4 py-3">{getCategoryBadge(post.category)}</td>
+                      <td className="px-4 py-3">
+                        <button
+                          onClick={() => loadPostDetail(post)}
+                          className="font-medium text-slate-800 hover:text-indigo-600 hover:underline text-left"
+                        >
+                          {post.title}
+                        </button>
+                      </td>
+                      <td className="px-4 py-3 text-slate-600">
+                        <div className="text-sm">{post.user_display_name || post.author_name || '-'}</div>
+                        {post.user_site && <div className="text-xs text-slate-400">{post.user_site}</div>}
+                      </td>
+                      <td className="px-4 py-3">{getStepBadge(step)}</td>
+                      <td className="px-4 py-3 text-xs text-slate-500 max-w-[160px] truncate">
+                        {post.last_process_log || '-'}
+                      </td>
+                      <td className="px-4 py-3 text-slate-500 text-xs">{formatDate(post.created_at)}</td>
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex justify-end gap-1 flex-wrap">
+                          {transitions.map(t => (
+                            <Button
+                              key={t.next}
+                              size="sm"
+                              variant="outline"
+                              disabled={transitioning}
+                              onClick={() => handleTransition(post.id, t.next)}
+                              className="text-xs h-7 px-2"
+                            >
+                              <ArrowRight className="h-3 w-3 mr-0.5" />
+                              {t.label}
+                            </Button>
+                          ))}
+                          {transitions.length === 0 && (
+                            <span className="text-xs text-gray-400 py-1">-</span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
@@ -303,12 +883,16 @@ function BoardManagement({ currentUser }: { currentUser: User }) {
   };
 
   const getStatusBadge = (status: string) => {
-    const map: Record<string, { text: string; className: string }> = {
+    const cfg = STEP_CONFIG[status as WorkflowStep];
+    if (cfg) {
+      return <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${cfg.className}`}>{cfg.icon}{cfg.label}</span>;
+    }
+    const legacyMap: Record<string, { text: string; className: string }> = {
       pending: { text: '대기 중', className: 'bg-amber-100 text-amber-800 border-amber-200' },
       answered: { text: '답변 완료', className: 'bg-emerald-100 text-emerald-800 border-emerald-200' },
       closed: { text: '종료', className: 'bg-slate-100 text-slate-800 border-slate-200' },
     };
-    const { text, className } = map[status] || map.pending;
+    const { text, className } = legacyMap[status] || { text: status, className: 'bg-gray-100 text-gray-700 border-gray-200' };
     return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${className}`}>{text}</span>;
   };
 
@@ -365,14 +949,15 @@ function BoardManagement({ currentUser }: { currentUser: User }) {
                     <ChevronDown className="h-3 w-3 ml-1" />
                   </Button>
                   {statusChangeOpen && (
-                    <div className="absolute right-0 top-full mt-1 bg-white border rounded-md shadow-lg z-10 py-1 min-w-[120px]">
-                      {['pending', 'answered', 'closed'].map(s => (
+                    <div className="absolute right-0 top-full mt-1 bg-white border rounded-md shadow-lg z-10 py-1 min-w-[140px]">
+                      {(Object.keys(STEP_CONFIG) as WorkflowStep[]).map(s => (
                         <button
                           key={s}
                           onClick={() => handleStatusChange(s)}
-                          className={`w-full text-left px-3 py-1.5 text-sm hover:bg-slate-50 ${selectedPost.status === s ? 'font-semibold text-indigo-600' : ''}`}
+                          className={`w-full text-left px-3 py-1.5 text-sm hover:bg-slate-50 flex items-center gap-1.5 ${selectedPost.status === s ? 'font-semibold text-indigo-600' : ''}`}
                         >
-                          {s === 'pending' ? '대기 중' : s === 'answered' ? '답변 완료' : '종료'}
+                          {STEP_CONFIG[s].icon}
+                          {STEP_CONFIG[s].label}
                         </button>
                       ))}
                     </div>
@@ -541,9 +1126,9 @@ function BoardManagement({ currentUser }: { currentUser: User }) {
               className="h-10 px-3 rounded-md border border-input bg-background text-sm"
             >
               <option value="">전체 상태</option>
-              <option value="pending">대기 중</option>
-              <option value="answered">답변 완료</option>
-              <option value="closed">종료</option>
+              {(Object.keys(STEP_CONFIG) as WorkflowStep[]).map(step => (
+                <option key={step} value={step}>{STEP_CONFIG[step].label}</option>
+              ))}
             </select>
             <Button type="submit">검색</Button>
           </form>

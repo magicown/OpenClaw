@@ -45,6 +45,17 @@ switch ($method) {
             $stmt->execute([$_GET['id']]);
             $post['attachments'] = $stmt->fetchAll();
 
+            // 프로세스 로그 조회
+            $stmt = $db->prepare("
+                SELECT pl.*, u.display_name as creator_name
+                FROM process_logs pl
+                LEFT JOIN users u ON pl.created_by = u.id
+                WHERE pl.post_id = ?
+                ORDER BY pl.created_at ASC
+            ");
+            $stmt->execute([$_GET['id']]);
+            $post['process_logs'] = $stmt->fetchAll();
+
             jsonResponse($post);
         } else {
             // 게시글 목록 조회 (페이지네이션, users JOIN)
@@ -71,6 +82,15 @@ switch ($method) {
                 $searchTerm = '%' . $_GET['search'] . '%';
                 $params[] = $searchTerm;
                 $params[] = $searchTerm;
+            }
+
+            // 내 글만 필터 (mine=1이면 로그인 사용자 글만)
+            if (!empty($_GET['mine'])) {
+                if (session_status() === PHP_SESSION_NONE) session_start();
+                if (isset($_SESSION['user_id'])) {
+                    $where[] = 'p.user_id = ?';
+                    $params[] = $_SESSION['user_id'];
+                }
             }
 
             $whereClause = implode(' AND ', $where);
@@ -137,7 +157,7 @@ switch ($method) {
                 $data['content'],
                 $user['id'],
                 $data['category'],
-                'pending'
+                'registered'
             ]);
 
             $postId = $db->lastInsertId();
@@ -169,6 +189,10 @@ switch ($method) {
                 VALUES (?, ?, ?, ?)
             ");
             $stmt->execute([$postId, $autoCommentContent, $adminName, true]);
+
+            // 프로세스 로그: 문의 등록
+            $stmt = $db->prepare("INSERT INTO process_logs (post_id, step, content) VALUES (?, 'registered', '문의글이 등록되었습니다.')");
+            $stmt->execute([$postId]);
 
             $db->commit();
 
