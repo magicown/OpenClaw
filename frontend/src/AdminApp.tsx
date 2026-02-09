@@ -135,7 +135,10 @@ const STEP_TRANSITIONS: Record<WorkflowStep, { label: string; next: WorkflowStep
     { label: '작업 완료', next: 'completed' },
     { label: '관리자 컨펌 필요', next: 'admin_confirm' },
   ],
-  completed: [],
+  completed: [
+    { label: '재작업 요청', next: 'rework' },
+    { label: '재검토', next: 'admin_confirm' },
+  ],
   admin_confirm: [
     { label: '완료 처리', next: 'completed' },
     { label: '재작업 요청', next: 'rework' },
