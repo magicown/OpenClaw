@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Button } from './components/ui/button';
 import { Input } from './components/ui/input';
 import { Textarea } from './components/ui/textarea';
@@ -265,6 +265,19 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
   const [commentContent, setCommentContent] = useState('');
   const [commentSubmitting, setCommentSubmitting] = useState(false);
 
+  // 새 글 알림
+  const [newPostAlert, setNewPostAlert] = useState<{ count: number; titles: string[] } | null>(null);
+  const prevPostIdsRef = useRef<Set<number>>(new Set());
+  const isFirstLoadRef = useRef(true);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // 알림 소리 초기화
+  useEffect(() => {
+    const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbsGUtGEFsxN/RkUM2PnrO7t2sSjk0XKjZ3LBiMiY8acLo2axjLx06Yrrf1KtgKxw3Xq3Y1q9oMSI8Z7re1rFtNC5Cb8Xl0LR1OjVMecfs0bp6QUhITXDF4NSzeT1IX7/h1btsMiE3Va/Z07V3QEJUitbq2blxPD5Wkdrs4LtzQEJUi9Xn1rNsNiY7WaXN0a9qNi1Gd87n2rp8Rk1fmc/e0LF1PUlchNDh07N8R1Fnjtzk2L6BSmFwnN7s4sOLW3iNsOb07tCjgG2Qs+z38NeslYF2oc3u+/DctZ2MhqXU8v/05MmypKKyzvT/+ujUw7y3xNz0//zv4tTNy9Xk8v/+9+ri3NnZ3+Xt9P/99+vh2NTR0tXb4Oj0/f358+zl3tnW1NTW2d3k7PX+/vz38Orn4t7c29rb3uHm7PL5/v79+fXx7uvp5+fn6Onr7vL2+v3+/fv49PPx8O/v7/Dx8vT3+fz9/f38+vn49/b29vb29/j5+vv8/f39/Pv7+vr5+fn5+fn6+vr7/Pz8/f38/Pv7+/v7+/v7+/v7+/z8/Pz8/Pz8/Pz8');
+    audio.volume = 0.5;
+    audioRef.current = audio;
+  }, []);
+
   const loadPosts = useCallback(async () => {
     try {
       setLoading(true);
@@ -275,13 +288,30 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
       const res = await fetch(`${API_BASE}/process.php?${params}`);
       const data = await res.json();
       const items: ProcessPost[] = data.data || data || [];
+
+      // 새 글 감지
+      if (!isFirstLoadRef.current && prevPostIdsRef.current.size > 0) {
+        const newPosts = items.filter(p => !prevPostIdsRef.current.has(p.id));
+        if (newPosts.length > 0) {
+          setNewPostAlert({
+            count: newPosts.length,
+            titles: newPosts.map(p => p.title),
+          });
+          // 알림 소리
+          audioRef.current?.play().catch(() => {});
+          // 5초 후 자동 닫기
+          setTimeout(() => setNewPostAlert(null), 8000);
+        }
+      }
+      isFirstLoadRef.current = false;
+      prevPostIdsRef.current = new Set(items.map(p => p.id));
+
       setPosts(items);
 
       // Compute counts from all posts (unfiltered) or from response
       if (data.counts) {
         setStepCounts(data.counts);
       } else {
-        // Compute from loaded data when no filter applied
         if (!stepFilter && !categoryFilter) {
           const counts: Record<string, number> = {};
           for (const step of Object.keys(STEP_CONFIG)) counts[step] = 0;
@@ -300,6 +330,14 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
   }, [stepFilter, categoryFilter]);
 
   useEffect(() => { loadPosts(); }, [loadPosts]);
+
+  // 30초마다 자동 새로고침 (새 글 감지)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!showDetail) loadPosts();
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [loadPosts, showDetail]);
 
   const loadPostDetail = async (post: ProcessPost) => {
     try {
@@ -612,6 +650,30 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
   // ─── List View ───
   return (
     <div className="space-y-4">
+      {/* 새 글 알림 배너 */}
+      {newPostAlert && (
+        <div className="relative overflow-hidden rounded-lg border-2 border-blue-400 bg-blue-50 p-4 shadow-lg animate-bounce" style={{ animationDuration: '1s', animationIterationCount: '3' }}>
+          <button onClick={() => setNewPostAlert(null)} className="absolute top-2 right-2 text-blue-400 hover:text-blue-600">
+            <X className="h-4 w-4" />
+          </button>
+          <div className="flex items-center gap-3">
+            <div className="flex-shrink-0">
+              <div className="h-10 w-10 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold text-lg animate-pulse">
+                {newPostAlert.count}
+              </div>
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-blue-800">새로운 문의가 등록되었습니다!</h4>
+              <div className="mt-1 space-y-0.5">
+                {newPostAlert.titles.map((title, i) => (
+                  <p key={i} className="text-xs text-blue-600 truncate max-w-md">• {title}</p>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Dashboard Summary */}
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
         {(Object.keys(STEP_CONFIG) as WorkflowStep[]).map(step => {
