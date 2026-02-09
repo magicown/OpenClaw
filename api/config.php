@@ -100,6 +100,69 @@ function uploadFile($file) {
     ];
 }
 
+// 텔레그램 봇 설정
+define('TELEGRAM_BOT_TOKEN', ''); // 텔레그램 봇 토큰 설정 필요
+define('TELEGRAM_CHAT_ID', '');   // 알림 받을 채팅 ID 설정 필요
+
+// 텔레그램 알림 전송
+function sendTelegramNotification($message) {
+    if (empty(TELEGRAM_BOT_TOKEN) || empty(TELEGRAM_CHAT_ID)) {
+        return false;
+    }
+
+    $url = 'https://api.telegram.org/bot' . TELEGRAM_BOT_TOKEN . '/sendMessage';
+    $payload = json_encode([
+        'chat_id' => TELEGRAM_CHAT_ID,
+        'text' => $message,
+        'parse_mode' => 'HTML',
+    ]);
+
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+
+    $response = curl_exec($ch);
+    curl_close($ch);
+
+    return $response !== false;
+}
+
+// 랜덤 관리자 이름 반환
+function getRandomAdminName() {
+    $names = ['에단', '미러', '마이클', '샘슨', '조나단', '엘리사', '미첼', '에비게일', '나탸샤', '촬리', '버클리', '엣지'];
+    return $names[array_rand($names)];
+}
+
+// 세션 기반 인증 체크
+function requireAuth() {
+    if (session_status() === PHP_SESSION_NONE) {
+        session_start();
+    }
+    if (!isset($_SESSION['user_id'])) {
+        jsonResponse(['error' => '로그인이 필요합니다.'], 401);
+    }
+    return [
+        'id' => $_SESSION['user_id'],
+        'username' => $_SESSION['username'],
+        'display_name' => $_SESSION['display_name'],
+        'role' => $_SESSION['role'] ?? 'user',
+        'site' => $_SESSION['site'] ?? null,
+    ];
+}
+
+// 관리자 권한 체크
+function requireAdmin() {
+    $user = requireAuth();
+    if ($user['role'] !== 'admin') {
+        jsonResponse(['error' => '관리자 권한이 필요합니다.'], 403);
+    }
+    return $user;
+}
+
 // Gemini AI 설정
 define('GEMINI_API_KEY', 'AIzaSyCtNxMa6WGwtko9f5TEk5fYXLzN8vac0vg');
 define('GEMINI_MODEL', 'gemini-2.0-flash');

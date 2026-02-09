@@ -23,10 +23,11 @@ switch ($method) {
         break;
 
     case 'POST':
-        // 댓글 생성
+        // 댓글 생성 (관리자만)
+        $admin = requireAdmin();
         $data = json_decode(file_get_contents('php://input'), true);
 
-        if (empty($data['post_id']) || empty($data['content']) || empty($data['author_name'])) {
+        if (empty($data['post_id']) || empty($data['content'])) {
             jsonResponse(['error' => 'Missing required fields'], 400);
         }
 
@@ -38,16 +39,14 @@ switch ($method) {
             $stmt->execute([
                 $data['post_id'],
                 $data['content'],
-                $data['author_name'],
+                $admin['display_name'],
                 (int)($data['is_ai_answer'] ?? false)
             ]);
 
             $commentId = $db->lastInsertId();
 
-            // AI 답변일 경우 게시글 상태 업데이트
-            if (!empty($data['is_ai_answer'])) {
-                $db->prepare("UPDATE posts SET status = 'answered' WHERE id = ?")->execute([$data['post_id']]);
-            }
+            // 답변 등록 시 게시글 상태 업데이트
+            $db->prepare("UPDATE posts SET status = 'answered' WHERE id = ?")->execute([$data['post_id']]);
 
             jsonResponse(['message' => 'Comment created successfully', 'comment_id' => $commentId], 201);
 
@@ -57,7 +56,9 @@ switch ($method) {
         break;
 
     case 'DELETE':
-        // 댓글 삭제
+        // 댓글 삭제 (관리자만)
+        $admin = requireAdmin();
+
         if (!isset($_GET['id'])) {
             jsonResponse(['error' => 'Comment ID required'], 400);
         }

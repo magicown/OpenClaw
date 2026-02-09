@@ -8,12 +8,13 @@ switch ($method) {
     case 'GET':
         // 게시글 목록 조회
         if (isset($_GET['id'])) {
-            // 특정 게시글 조회
+            // 특정 게시글 조회 (users 테이블 JOIN)
             $stmt = $db->prepare("
-                SELECT p.*,
+                SELECT p.*, u.display_name as user_display_name, u.site as user_site,
                     (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comment_count,
                     (SELECT COUNT(*) FROM attachments WHERE post_id = p.id) as attachment_count
                 FROM posts p
+                LEFT JOIN users u ON p.user_id = u.id
                 WHERE p.id = ?
             ");
             $stmt->execute([$_GET['id']]);
@@ -46,7 +47,7 @@ switch ($method) {
 
             jsonResponse($post);
         } else {
-            // 게시글 목록 조회 (페이지네이션)
+            // 게시글 목록 조회 (페이지네이션, users JOIN)
             $page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
             $limit = isset($_GET['limit']) ? min(100, max(1, intval($_GET['limit']))) : 10;
             $offset = ($page - 1) * $limit;
@@ -58,6 +59,11 @@ switch ($method) {
             if (!empty($_GET['status'])) {
                 $where[] = 'p.status = ?';
                 $params[] = $_GET['status'];
+            }
+
+            if (!empty($_GET['category'])) {
+                $where[] = 'p.category = ?';
+                $params[] = $_GET['category'];
             }
 
             if (!empty($_GET['search'])) {
@@ -80,10 +86,11 @@ switch ($method) {
 
             // 게시글 목록
             $stmt = $db->prepare("
-                SELECT p.*,
+                SELECT p.*, u.display_name as user_display_name, u.site as user_site,
                     (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comment_count,
                     (SELECT COUNT(*) FROM attachments WHERE post_id = p.id) as attachment_count
                 FROM posts p
+                LEFT JOIN users u ON p.user_id = u.id
                 WHERE {$whereClause}
                 ORDER BY p.created_at DESC
                 LIMIT {$limit} OFFSET {$offset}
@@ -104,26 +111,33 @@ switch ($method) {
         break;
 
     case 'POST':
-        // 게시글 생성
+        // 게시글 생성 (로그인 필수)
+        $user = requireAuth();
         $data = json_decode(file_get_contents('php://input'), true);
 
-        if (empty($data['title']) || empty($data['content']) || empty($data['author_name'])) {
-            jsonResponse(['error' => 'Missing required fields'], 400);
+        if (empty($data['title']) || empty($data['content']) || empty($data['category'])) {
+            jsonResponse(['error' => 'Missing required fields (title, content, category)'], 400);
+        }
+
+        // 카테고리 유효성 검사
+        $validCategories = ['긴급', '오류', '건의', '추가개발', '기타'];
+        if (!in_array($data['category'], $validCategories)) {
+            jsonResponse(['error' => 'Invalid category'], 400);
         }
 
         try {
             $db->beginTransaction();
 
             $stmt = $db->prepare("
-                INSERT INTO posts (title, content, author_name, author_email, status)
+                INSERT INTO posts (title, content, user_id, category, status)
                 VALUES (?, ?, ?, ?, ?)
             ");
             $stmt->execute([
                 $data['title'],
                 $data['content'],
-                $data['author_name'],
-                $data['author_email'] ?? null,
-                $data['status'] ?? 'pending'
+                $user['id'],
+                $data['category'],
+                'pending'
             ]);
 
             $postId = $db->lastInsertId();
@@ -147,21 +161,21 @@ switch ($method) {
                 }
             }
 
+            // 자동 댓글 생성 (고정 메시지 + 랜덤 관리자 이름)
+            $autoCommentContent = "해당 문제를 확인하고 있습니다. 확인되는데로 답변 드리겠습니다.";
+            $adminName = getRandomAdminName();
+            $stmt = $db->prepare("
+                INSERT INTO comments (post_id, content, author_name, is_ai_answer)
+                VALUES (?, ?, ?, ?)
+            ");
+            $stmt->execute([$postId, $autoCommentContent, $adminName, true]);
+
             $db->commit();
 
-            // AI 답변 자동 생성 (필요시)
-            if (isset($data['auto_ai_answer']) && $data['auto_ai_answer']) {
-                $aiAnswer = generateAIAnswer($data['content']);
-
-                $stmt = $db->prepare("
-                    INSERT INTO comments (post_id, content, author_name, is_ai_answer)
-                    VALUES (?, ?, 'AI Assistant', ?)
-                ");
-                $stmt->execute([$postId, $aiAnswer, true]);
-
-                // 상태 업데이트
-                $db->prepare("UPDATE posts SET status = 'answered' WHERE id = ?")->execute([$postId]);
-            }
+            // 텔레그램 알림 전송 (트랜잭션 밖에서)
+            $siteName = $user['site'] ?? '알 수 없음';
+            $telegramMessage = "새로운 문의가 생성 되었습니다. [{$siteName}]\n제목: {$data['title']}\n카테고리: {$data['category']}";
+            sendTelegramNotification($telegramMessage);
 
             jsonResponse(['message' => 'Post created successfully', 'post_id' => $postId], 201);
 
@@ -172,69 +186,27 @@ switch ($method) {
         break;
 
     case 'PUT':
-        // 게시글 수정
+        // 게시글 상태 변경 (관리자만)
+        $admin = requireAdmin();
+
         if (!isset($_GET['id'])) {
             jsonResponse(['error' => 'Post ID required'], 400);
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
-
-        try {
-            $db->beginTransaction();
-
-            $stmt = $db->prepare("
-                UPDATE posts
-                SET title = ?, content = ?, author_name = ?, author_email = ?, status = ?
-                WHERE id = ?
-            ");
-            $stmt->execute([
-                $data['title'] ?? '',
-                $data['content'] ?? '',
-                $data['author_name'] ?? '',
-                $data['author_email'] ?? null,
-                $data['status'] ?? 'pending',
-                $_GET['id']
-            ]);
-
-            // 첨부파일 삭제
-            if (isset($data['deleted_attachments']) && is_array($data['deleted_attachments'])) {
-                $stmt = $db->prepare("DELETE FROM attachments WHERE id = ? AND post_id = ?");
-                foreach ($data['deleted_attachments'] as $attachmentId) {
-                    $stmt->execute([$attachmentId, $_GET['id']]);
-                }
-            }
-
-            // 새 첨부파일 추가
-            if (isset($data['new_attachments']) && is_array($data['new_attachments'])) {
-                $stmt = $db->prepare("
-                    INSERT INTO attachments (post_id, file_name, file_path, file_size, mime_type, file_type)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ");
-
-                foreach ($data['new_attachments'] as $attachment) {
-                    $stmt->execute([
-                        $_GET['id'],
-                        $attachment['file_name'],
-                        $attachment['file_path'],
-                        $attachment['file_size'],
-                        $attachment['mime_type'],
-                        $attachment['file_type']
-                    ]);
-                }
-            }
-
-            $db->commit();
-
-            jsonResponse(['message' => 'Post updated successfully']);
-
-        } catch (Exception $e) {
-            $db->rollBack();
-            jsonResponse(['error' => $e->getMessage()], 500);
+        if (empty($data['status']) || !in_array($data['status'], ['pending', 'answered', 'closed'])) {
+            jsonResponse(['error' => 'Valid status required'], 400);
         }
+
+        $stmt = $db->prepare("UPDATE posts SET status = ? WHERE id = ?");
+        $stmt->execute([$data['status'], $_GET['id']]);
+        jsonResponse(['message' => 'Status updated successfully']);
         break;
 
     case 'DELETE':
-        // 게시글 삭제
+        // 게시글 삭제 (관리자만)
+        $admin = requireAdmin();
+
         if (!isset($_GET['id'])) {
             jsonResponse(['error' => 'Post ID required'], 400);
         }

@@ -13,6 +13,8 @@ if ($method === 'GET') {
                 'id' => $_SESSION['user_id'],
                 'username' => $_SESSION['username'],
                 'display_name' => $_SESSION['display_name'],
+                'role' => $_SESSION['role'] ?? 'user',
+                'site' => $_SESSION['site'] ?? null,
             ]
         ]);
     } else {
@@ -32,7 +34,7 @@ if ($method === 'POST') {
     }
 
     $db = getDB();
-    $stmt = $db->prepare('SELECT id, username, password_hash, display_name FROM users WHERE username = ?');
+    $stmt = $db->prepare('SELECT id, username, password_hash, display_name, role, site FROM users WHERE username = ?');
     $stmt->execute([$username]);
     $user = $stmt->fetch();
 
@@ -44,6 +46,8 @@ if ($method === 'POST') {
     $_SESSION['user_id'] = $user['id'];
     $_SESSION['username'] = $user['username'];
     $_SESSION['display_name'] = $user['display_name'];
+    $_SESSION['role'] = $user['role'] ?? 'user';
+    $_SESSION['site'] = $user['site'] ?? null;
 
     jsonResponse([
         'message' => '로그인 성공',
@@ -51,6 +55,8 @@ if ($method === 'POST') {
             'id' => $user['id'],
             'username' => $user['username'],
             'display_name' => $user['display_name'],
+            'role' => $user['role'] ?? 'user',
+            'site' => $user['site'] ?? null,
         ]
     ]);
 }

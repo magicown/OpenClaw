@@ -4,8 +4,10 @@ export interface Post {
   id: number;
   title: string;
   content: string;
-  author_name: string;
-  author_email?: string;
+  user_id: number;
+  category: '긴급' | '오류' | '건의' | '추가개발' | '기타';
+  user_display_name?: string;
+  user_site?: string;
   status: 'pending' | 'answered' | 'closed';
   view_count: number;
   created_at: string;
@@ -51,6 +53,8 @@ export interface User {
   id: number;
   username: string;
   display_name: string;
+  role: 'user' | 'admin';
+  site: string | null;
 }
 
 // 인증 API
@@ -110,11 +114,8 @@ export const postsApi = {
   create: async (data: {
     title: string;
     content: string;
-    author_name: string;
-    author_email?: string;
-    status?: string;
+    category: string;
     attachments?: any[];
-    auto_ai_answer?: boolean;
   }) => {
     const response = await fetch(`${API_BASE_URL}/posts.php`, {
       method: 'POST',
@@ -122,17 +123,6 @@ export const postsApi = {
       body: JSON.stringify(data),
     });
     if (!response.ok) throw new Error('Failed to create post');
-    return response.json();
-  },
-
-  // 게시글 수정
-  update: async (id: number, data: Partial<Post>) => {
-    const response = await fetch(`${API_BASE_URL}/posts.php?id=${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) throw new Error('Failed to update post');
     return response.json();
   },
 
@@ -155,11 +145,10 @@ export const commentsApi = {
     return response.json() as Promise<Comment[]>;
   },
 
-  // 댓글 생성
+  // 댓글 생성 (관리자만)
   create: async (data: {
     post_id: number;
     content: string;
-    author_name: string;
     is_ai_answer?: boolean;
   }) => {
     const response = await fetch(`${API_BASE_URL}/comments.php`, {
@@ -171,7 +160,7 @@ export const commentsApi = {
     return response.json();
   },
 
-  // 댓글 삭제
+  // 댓글 삭제 (관리자만)
   delete: async (id: number) => {
     const response = await fetch(`${API_BASE_URL}/comments.php?id=${id}`, {
       method: 'DELETE',
@@ -181,17 +170,39 @@ export const commentsApi = {
   },
 };
 
-// AI 답변 API
-export const aiApi = {
-  // AI 답변 생성
-  generate: async (data: { post_id: number; question: string }) => {
-    const response = await fetch(`${API_BASE_URL}/ai-answer.php`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) throw new Error('Failed to generate AI answer');
-    return response.json();
+// 관리자 API
+export const adminApi = {
+  users: {
+    list: async () => {
+      const response = await fetch(`${API_BASE_URL}/admin/users.php`);
+      if (!response.ok) throw new Error('Failed to fetch users');
+      return response.json();
+    },
+    create: async (data: { username: string; password: string; display_name: string; role?: string; site?: string }) => {
+      const response = await fetch(`${API_BASE_URL}/admin/users.php`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (!response.ok) throw new Error('Failed to create user');
+      return response.json();
+    },
+    update: async (id: number, data: { display_name?: string; password?: string; role?: string; site?: string }) => {
+      const response = await fetch(`${API_BASE_URL}/admin/users.php?id=${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (!response.ok) throw new Error('Failed to update user');
+      return response.json();
+    },
+    delete: async (id: number) => {
+      const response = await fetch(`${API_BASE_URL}/admin/users.php?id=${id}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) throw new Error('Failed to delete user');
+      return response.json();
+    },
   },
 };
 
