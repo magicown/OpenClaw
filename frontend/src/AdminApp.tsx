@@ -104,6 +104,8 @@ interface ProcessPost {
   comment_count: number;
   attachment_count: number;
   last_process_log?: string;
+  last_log?: string;
+  log_count?: number;
   comments?: Comment[];
   attachments?: Attachment[];
 }
@@ -735,30 +737,22 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
                   </div>
 
                   {/* 처리 진행 박스 */}
-                  <div className="flex items-stretch gap-0 rounded-lg border border-slate-200 overflow-hidden">
+                  <div className="flex items-stretch gap-0 rounded-lg border border-slate-200 overflow-hidden relative">
                     {MAIN_FLOW.map((step, idx) => {
                       const cfg = STEP_CONFIG[step];
                       const isCurrent = step === currentStep;
                       const isPast = !isSpecial && currentIdx > idx;
-                      const isFuture = !isSpecial && !isCurrent && currentIdx < idx;
-                      // 특수 상태(admin_confirm/rework)일 때: ai_processing까지 완료된 것으로 처리
-                      const isSpecialPast = isSpecial && idx <= 3; // registered~ai_processing까지 완료
+                      const isSpecialPast = isSpecial && idx <= 3;
 
                       let bgClass = '';
                       let textClass = '';
 
                       if (isCurrent) {
-                        // 현재 단계: 진한 색 + 강조
-                        bgClass = cfg.className.replace('border-', 'border-b-2 border-b-').replace(/bg-(\w+)-100/, 'bg-$1-200');
+                        bgClass = cfg.className.replace(/bg-(\w+)-100/, 'bg-$1-200');
                         textClass = 'font-bold';
                       } else if (isPast || isSpecialPast) {
-                        // 완료된 단계: 색상 있음
                         bgClass = cfg.className;
                         textClass = 'font-medium';
-                      } else if (isFuture) {
-                        // 미래 단계: 회색
-                        bgClass = 'bg-slate-50 text-slate-300 border-slate-100';
-                        textClass = '';
                       } else {
                         bgClass = 'bg-slate-50 text-slate-300 border-slate-100';
                         textClass = '';
@@ -767,34 +761,54 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
                       return (
                         <div
                           key={step}
-                          className={`flex-1 flex flex-col items-center justify-center py-2.5 px-1 relative ${bgClass} ${
-                            isCurrent ? 'ring-2 ring-inset ring-indigo-400 z-10' : ''
-                          }`}
+                          className={`flex-1 flex flex-col items-center justify-center py-3 px-1 relative transition-all duration-300 ${bgClass}`}
                         >
+                          {/* 현재 단계 전체 박스 글로우 애니메이션 */}
+                          {isCurrent && (
+                            <>
+                              <div className="absolute inset-0 animate-pulse bg-white/30 z-0" />
+                              <div className="absolute inset-x-0 bottom-0 h-1 bg-indigo-500 z-10">
+                                <div className="h-full bg-indigo-300 animate-[shimmer_1.5s_ease-in-out_infinite]"
+                                  style={{
+                                    background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.6) 50%, transparent 100%)',
+                                    backgroundSize: '200% 100%',
+                                    animation: 'shimmer 1.5s ease-in-out infinite',
+                                  }}
+                                />
+                              </div>
+                              <div className="absolute -inset-[1px] rounded-sm border-2 border-indigo-400 animate-pulse z-10 pointer-events-none" />
+                            </>
+                          )}
                           {/* 아이콘 */}
-                          <div className={`mb-0.5 ${textClass}`}>
+                          <div className={`mb-1 relative z-20 ${textClass}`}>
                             {isPast || isSpecialPast ? (
-                              <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                              <CheckCircle2 className="h-5 w-5 text-emerald-500" />
                             ) : isCurrent ? (
                               <div className="relative">
-                                <div className="h-4 w-4">{cfg.icon}</div>
-                                <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
+                                <div className="h-5 w-5 animate-bounce" style={{ animationDuration: '2s' }}>{cfg.icon}</div>
+                                <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
                                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
-                                  <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-indigo-500"></span>
                                 </span>
                               </div>
                             ) : (
-                              <div className="h-4 w-4 rounded-full border-2 border-slate-200" />
+                              <div className="h-5 w-5 rounded-full border-2 border-slate-200" />
                             )}
                           </div>
                           {/* 라벨 */}
-                          <span className={`text-[10px] leading-tight text-center ${textClass}`}>
+                          <span className={`text-[11px] leading-tight text-center relative z-20 ${textClass}`}>
                             {cfg.label}
                           </span>
+                          {/* 현재 단계 표시 텍스트 */}
+                          {isCurrent && (
+                            <span className="text-[9px] text-indigo-600 font-bold mt-0.5 relative z-20 animate-pulse">
+                              진행 중
+                            </span>
+                          )}
                           {/* 화살표 (마지막 제외) */}
                           {idx < MAIN_FLOW.length - 1 && (
-                            <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 z-20">
-                              <ArrowRight className={`h-3 w-3 ${isPast || isSpecialPast ? 'text-emerald-400' : 'text-slate-200'}`} />
+                            <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 z-30">
+                              <ArrowRight className={`h-3.5 w-3.5 ${isPast || isSpecialPast ? 'text-emerald-400' : isCurrent ? 'text-indigo-400' : 'text-slate-200'}`} />
                             </div>
                           )}
                         </div>
@@ -804,18 +818,21 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
 
                   {/* 특수 상태 표시 (admin_confirm / rework) */}
                   {isSpecial && (
-                    <div className={`mt-2 flex items-center gap-2 px-3 py-1.5 rounded-md border ${STEP_CONFIG[currentStep].className}`}>
-                      {STEP_CONFIG[currentStep].icon}
-                      <span className="text-xs font-semibold">{STEP_CONFIG[currentStep].label}</span>
-                      <span className="text-xs opacity-70">- {post.last_process_log || '처리 중'}</span>
+                    <div className={`mt-2 flex items-center gap-2 px-3 py-2 rounded-md border-2 animate-pulse ${STEP_CONFIG[currentStep].className}`}>
+                      <div className="animate-bounce" style={{ animationDuration: '2s' }}>
+                        {STEP_CONFIG[currentStep].icon}
+                      </div>
+                      <span className="text-xs font-bold">{STEP_CONFIG[currentStep].label}</span>
+                      <span className="text-[9px] font-bold animate-pulse">진행 중</span>
+                      <span className="text-xs opacity-70">- {(post.last_process_log || post.last_log) || '처리 중'}</span>
                     </div>
                   )}
 
                   {/* 최근 메모 (특수 상태가 아닌 경우) */}
-                  {!isSpecial && post.last_process_log && (
+                  {!isSpecial && (post.last_process_log || post.last_log) && (
                     <div className="mt-2 text-xs text-slate-500 truncate">
                       <Clock className="h-3 w-3 inline mr-1" />
-                      {post.last_process_log}
+                      {(post.last_process_log || post.last_log)}
                     </div>
                   )}
                 </CardContent>
