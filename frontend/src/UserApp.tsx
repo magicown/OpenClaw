@@ -131,12 +131,12 @@ function UserApp({ currentUser, onLogout }: UserAppProps) {
   const getStatusBadge = (status: string) => {
     const statusMap: Record<string, { text: string; className: string }> = {
       registered: { text: '문의 등록', className: 'bg-blue-100 text-blue-700 border-blue-300' },
-      ai_review: { text: 'AI 확인 중', className: 'bg-purple-100 text-purple-700 border-purple-300' },
+      ai_review: { text: '확인 중', className: 'bg-purple-100 text-purple-700 border-purple-300' },
       pending_approval: { text: '승인 대기', className: 'bg-amber-100 text-amber-700 border-amber-300' },
-      ai_processing: { text: 'AI 작업 중', className: 'bg-cyan-100 text-cyan-700 border-cyan-300' },
+      ai_processing: { text: '작업 중', className: 'bg-cyan-100 text-cyan-700 border-cyan-300' },
       completed: { text: '완료', className: 'bg-green-100 text-green-700 border-green-300' },
-      admin_confirm: { text: '관리자 컨펌', className: 'bg-indigo-100 text-indigo-700 border-indigo-300' },
-      rework: { text: '재작업', className: 'bg-red-100 text-red-700 border-red-300' },
+      admin_confirm: { text: '승인 대기', className: 'bg-amber-100 text-amber-700 border-amber-300' },
+      rework: { text: '작업 중', className: 'bg-cyan-100 text-cyan-700 border-cyan-300' },
       // Legacy statuses for backward compatibility
       pending: { text: '대기 중', className: 'bg-gray-100 text-gray-700 border-gray-300' },
       answered: { text: '답변 완료', className: 'bg-green-100 text-green-700 border-green-300' },
@@ -190,14 +190,14 @@ function UserApp({ currentUser, onLogout }: UserAppProps) {
   };
 
   // 처리 단계 진행 표시 컴포넌트
-  const MAIN_STEPS = ['registered', 'ai_review', 'pending_approval', 'ai_processing', 'completed'] as const;
+  const MAIN_STEPS = ['registered', 'ai_review', 'ai_processing', 'pending_approval', 'completed'] as const;
   const STEP_LABELS: Record<string, string> = {
     registered: '문의 등록',
-    ai_review: 'AI 확인',
+    ai_review: '확인 중',
     pending_approval: '승인 대기',
-    ai_processing: 'AI 작업 중',
+    ai_processing: '작업 중',
     completed: '완료',
-    admin_confirm: '관리자 컨펌',
+    admin_confirm: '승인 대기',
     rework: '재작업',
   };
 
