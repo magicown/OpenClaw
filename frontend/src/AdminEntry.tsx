@@ -4,10 +4,10 @@ import { Button } from './components/ui/button';
 import { Input } from './components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from './components/ui/card';
 import { Label } from './components/ui/label';
-import { Lock, User as UserIcon } from 'lucide-react';
-import UserApp from './UserApp';
+import { Lock, Shield } from 'lucide-react';
+import AdminApp from './AdminApp';
 
-function App() {
+export default function AdminEntry() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [loginUsername, setLoginUsername] = useState('');
@@ -19,7 +19,7 @@ function App() {
     const checkAuth = async () => {
       try {
         const result = await authApi.check();
-        if (result.logged_in && result.user && result.user.role === 'user') {
+        if (result.logged_in && result.user && result.user.role === 'admin') {
           setCurrentUser(result.user);
         }
       } catch {
@@ -40,9 +40,9 @@ function App() {
       setLoginError('');
       const result = await authApi.login(loginUsername, loginPassword);
 
-      if (result.user.role === 'admin') {
+      if (result.user.role !== 'admin') {
         await authApi.logout();
-        setLoginError('일반 사용자 계정으로 로그인해주세요.');
+        setLoginError('관리자 계정만 접속할 수 있습니다.');
         return;
       }
 
@@ -67,7 +67,7 @@ function App() {
 
   if (!authChecked) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
+      <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-slate-100 flex items-center justify-center">
         <div className="text-gray-600">로딩 중...</div>
       </div>
     );
@@ -75,14 +75,14 @@ function App() {
 
   if (!currentUser) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-slate-100 flex items-center justify-center p-4">
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
-            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-blue-100">
-              <Lock className="h-7 w-7 text-blue-600" />
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-indigo-100">
+              <Shield className="h-7 w-7 text-indigo-600" />
             </div>
-            <CardTitle className="text-2xl">Q&A 게시판</CardTitle>
-            <CardDescription>계정에 로그인하세요</CardDescription>
+            <CardTitle className="text-2xl">Q&A 관리자</CardTitle>
+            <CardDescription>관리자 계정으로 로그인하세요</CardDescription>
           </CardHeader>
           <form onSubmit={handleLogin}>
             <CardContent className="space-y-4">
@@ -92,29 +92,29 @@ function App() {
                 </div>
               )}
               <div className="space-y-2">
-                <Label htmlFor="login_username">아이디</Label>
+                <Label htmlFor="admin_username">아이디</Label>
                 <div className="relative">
-                  <UserIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+                  <Shield className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
                   <Input
-                    id="login_username"
+                    id="admin_username"
                     value={loginUsername}
                     onChange={(e) => setLoginUsername(e.target.value)}
-                    placeholder="아이디를 입력하세요"
+                    placeholder="관리자 아이디"
                     className="pl-10"
                     required
                   />
                 </div>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="login_password">비밀번호</Label>
+                <Label htmlFor="admin_password">비밀번호</Label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
                   <Input
-                    id="login_password"
+                    id="admin_password"
                     type="password"
                     value={loginPassword}
                     onChange={(e) => setLoginPassword(e.target.value)}
-                    placeholder="비밀번호를 입력하세요"
+                    placeholder="비밀번호"
                     className="pl-10"
                     required
                   />
@@ -122,8 +122,8 @@ function App() {
               </div>
             </CardContent>
             <CardFooter>
-              <Button type="submit" className="w-full" disabled={loginLoading}>
-                {loginLoading ? '로그인 중...' : '로그인'}
+              <Button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700" disabled={loginLoading}>
+                {loginLoading ? '로그인 중...' : '관리자 로그인'}
               </Button>
             </CardFooter>
           </form>
@@ -132,7 +132,5 @@ function App() {
     );
   }
 
-  return <UserApp currentUser={currentUser} onLogout={handleLogout} />;
+  return <AdminApp currentUser={currentUser} onLogout={handleLogout} />;
 }
-
-export default App;
