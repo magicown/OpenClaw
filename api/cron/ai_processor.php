@@ -342,18 +342,32 @@ try {
             $impactAnalysis = analyzeImpactWithAI($pdcaPlan, $serverInfo, $diagnostics);
             logMsg("게시글 #{$post['id']}: 영향도 분석 완료");
 
-            // 결과 저장 + pending_approval 전환
+            // 자동/수동 처리 모드 확인
+            $modeStmt = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'auto_process_mode'");
+            $modeStmt->execute();
+            $autoMode = ($modeStmt->fetchColumn() ?: 'manual') === 'auto';
+
+            // 결과 저장
             $db->beginTransaction();
 
             $db->prepare("INSERT INTO ai_analysis_results (post_id, phase, iteration, impact_analysis, raw_claude_output, status) VALUES (?, 'impact', 1, ?, ?, 'completed')")
                 ->execute([$post['id'], $impactAnalysis, $impactAnalysis]);
 
-            $db->prepare("UPDATE posts SET status = 'pending_approval' WHERE id = ?")->execute([$post['id']]);
+            if ($autoMode) {
+                // 자동 모드: 승인 없이 바로 ai_execution으로 전환
+                $db->prepare("UPDATE posts SET status = 'ai_execution' WHERE id = ?")->execute([$post['id']]);
 
-            // 종합 분석 결과를 process_logs에 기록
-            $fullAnalysis = "PDCA 분석 + 영향도 분석이 완료되었습니다. 관리자 승인을 대기합니다.\n\n" . $pdcaPlan . "\n\n---\n\n" . $impactAnalysis;
-            $db->prepare("INSERT INTO process_logs (post_id, step, content) VALUES (?, 'pending_approval', ?)")
-                ->execute([$post['id'], $fullAnalysis]);
+                $fullAnalysis = "PDCA 분석 + 영향도 분석이 완료되었습니다. [자동 모드] 승인 없이 서버 수정을 시작합니다.\n\n" . $pdcaPlan . "\n\n---\n\n" . $impactAnalysis;
+                $db->prepare("INSERT INTO process_logs (post_id, step, content) VALUES (?, 'ai_execution', ?)")
+                    ->execute([$post['id'], $fullAnalysis]);
+            } else {
+                // 수동 모드: pending_approval로 전환 (관리자 승인 대기)
+                $db->prepare("UPDATE posts SET status = 'pending_approval' WHERE id = ?")->execute([$post['id']]);
+
+                $fullAnalysis = "PDCA 분석 + 영향도 분석이 완료되었습니다. 관리자 승인을 대기합니다.\n\n" . $pdcaPlan . "\n\n---\n\n" . $impactAnalysis;
+                $db->prepare("INSERT INTO process_logs (post_id, step, content) VALUES (?, 'pending_approval', ?)")
+                    ->execute([$post['id'], $fullAnalysis]);
+            }
 
             // AI 분석 결과를 댓글로 등록
             $adminName = getRandomAdminName();
@@ -363,7 +377,7 @@ try {
 
             $db->commit();
 
-            // 텔레그램 인라인 버튼 포함 승인 요청
+            // 텔레그램 알림
             $siteName = $post['user_site'] ?? '알 수 없음';
 
             // 영향도에서 위험도 등급 추출
@@ -382,7 +396,6 @@ try {
             $telegramMsg .= "🏢 사이트: {$siteName}\n";
             $telegramMsg .= "📂 카테고리: {$post['category']}\n\n";
 
-            // PDCA 요약 (처음 5줄)
             $pdcaLines = explode("\n", $pdcaPlan);
             $pdcaSummary = implode("\n", array_slice($pdcaLines, 0, 8));
             $telegramMsg .= "💡 수정 방안:\n{$pdcaSummary}\n\n";
@@ -390,21 +403,27 @@ try {
             $telegramMsg .= "⚠️ 영향도: {$riskLevel}\n";
             $telegramMsg .= "  - 다운타임: {$downtime}\n";
 
-            // 인라인 버튼
-            $buttons = [[
-                ['text' => '✅ 승인', 'callback_data' => "approve_{$post['id']}_{$pdcaAnalysisId}"],
-                ['text' => '❌ 거절', 'callback_data' => "reject_{$post['id']}_{$pdcaAnalysisId}"],
-            ]];
+            if ($autoMode) {
+                // 자동 모드: 승인 버튼 없이 알림만
+                $telegramMsg .= "\n🤖 [자동 모드] 승인 없이 서버 수정을 바로 시작합니다.";
+                sendTelegramNotification($telegramMsg);
+            } else {
+                // 수동 모드: 인라인 버튼 포함 승인 요청
+                $buttons = [[
+                    ['text' => '✅ 승인', 'callback_data' => "approve_{$post['id']}_{$pdcaAnalysisId}"],
+                    ['text' => '❌ 거절', 'callback_data' => "reject_{$post['id']}_{$pdcaAnalysisId}"],
+                ]];
 
-            $messageId = sendTelegramWithInlineKeyboard($telegramMsg, $buttons);
+                $messageId = sendTelegramWithInlineKeyboard($telegramMsg, $buttons);
 
-            // 텔레그램 승인 추적 레코드 생성
-            if ($messageId) {
-                $db->prepare("INSERT INTO telegram_approvals (post_id, analysis_id, telegram_message_id, callback_data, action) VALUES (?, ?, ?, ?, 'pending')")
-                    ->execute([$post['id'], $pdcaAnalysisId, $messageId, "approve_{$post['id']}_{$pdcaAnalysisId}"]);
+                if ($messageId) {
+                    $db->prepare("INSERT INTO telegram_approvals (post_id, analysis_id, telegram_message_id, callback_data, action) VALUES (?, ?, ?, ?, 'pending')")
+                        ->execute([$post['id'], $pdcaAnalysisId, $messageId, "approve_{$post['id']}_{$pdcaAnalysisId}"]);
+                }
             }
 
-            logMsg("게시글 #{$post['id']}: Phase 3 완료 — pending_approval + 텔레그램 승인 요청 전송");
+            $modeLabel = $autoMode ? '자동 모드 → ai_execution' : '수동 모드 → pending_approval';
+            logMsg("게시글 #{$post['id']}: Phase 3 완료 — {$modeLabel}");
 
         } catch (Exception $e) {
             if ($db->inTransaction()) $db->rollBack();

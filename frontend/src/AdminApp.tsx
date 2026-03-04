@@ -19,7 +19,7 @@ import {
   Plus, ChevronDown, ArrowLeft, Shield,
   ClipboardList, ArrowRight, Clock, CheckCircle2, Activity,
   RotateCcw, Cpu, FileCheck, X, Server, Globe, KeyRound,
-  EyeOff, Copy, Check
+  EyeOff, Copy, Check, Settings, ToggleLeft, ToggleRight
 } from 'lucide-react';
 
 const API_BASE = '/api';
@@ -82,7 +82,7 @@ interface AdminAppProps {
   onLogout: () => void;
 }
 
-type Tab = 'process' | 'board' | 'users' | 'servers';
+type Tab = 'process' | 'board' | 'users' | 'servers' | 'settings';
 type BoardView = 'list' | 'detail';
 
 // Workflow step types
@@ -258,6 +258,17 @@ export default function AdminApp({ currentUser, onLogout }: AdminAppProps) {
               <Server className="h-4 w-4 inline mr-1.5 -mt-0.5" />
               서버 관리
             </button>
+            <button
+              onClick={() => setActiveTab('settings')}
+              className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'settings'
+                  ? 'border-white text-white'
+                  : 'border-transparent text-indigo-300 hover:text-white hover:border-indigo-400'
+              }`}
+            >
+              <Settings className="h-4 w-4 inline mr-1.5 -mt-0.5" />
+              설정
+            </button>
           </nav>
         </div>
       </div>
@@ -270,6 +281,8 @@ export default function AdminApp({ currentUser, onLogout }: AdminAppProps) {
           <BoardManagement currentUser={currentUser} />
         ) : activeTab === 'servers' ? (
           <ServerManagement />
+        ) : activeTab === 'settings' ? (
+          <SettingsManagement />
         ) : (
           <UserManagement currentUser={currentUser} />
         )}
@@ -2439,6 +2452,140 @@ function ServerManagement() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+// ─── Settings Management ───────────────────────────────────────
+
+function SettingsManagement() {
+  const [autoProcessMode, setAutoProcessMode] = useState<'auto' | 'manual'>('manual');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetchSettings();
+  }, []);
+
+  const fetchSettings = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/admin/settings.php`, { credentials: 'include' });
+      const data = await res.json();
+      if (data.auto_process_mode) {
+        setAutoProcessMode(data.auto_process_mode as 'auto' | 'manual');
+      }
+    } catch (err) {
+      console.error('설정 로드 실패:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggleMode = async () => {
+    const newMode = autoProcessMode === 'auto' ? 'manual' : 'auto';
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/admin/settings.php`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auto_process_mode: newMode }),
+      });
+      if (res.ok) {
+        setAutoProcessMode(newMode);
+      }
+    } catch (err) {
+      console.error('설정 저장 실패:', err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center py-20">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <h2 className="text-xl font-bold text-gray-900">시스템 설정</h2>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Cpu className="h-5 w-5" />
+            수정요청 처리 모드
+          </CardTitle>
+          <CardDescription>
+            문의 접수 후 AI 분석 및 서버 수정 작업의 처리 방식을 설정합니다.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-between p-4 rounded-lg border bg-gray-50">
+            <div className="space-y-1">
+              <div className="flex items-center gap-3">
+                <span className={`text-sm font-medium ${autoProcessMode === 'manual' ? 'text-indigo-700' : 'text-gray-400'}`}>
+                  수동 처리
+                </span>
+                <button
+                  onClick={toggleMode}
+                  disabled={saving}
+                  className="relative inline-flex h-7 w-14 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50"
+                  style={{ backgroundColor: autoProcessMode === 'auto' ? '#4f46e5' : '#d1d5db' }}
+                >
+                  <span
+                    className="inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition-transform"
+                    style={{ transform: autoProcessMode === 'auto' ? 'translateX(30px)' : 'translateX(4px)' }}
+                  />
+                </button>
+                <span className={`text-sm font-medium ${autoProcessMode === 'auto' ? 'text-indigo-700' : 'text-gray-400'}`}>
+                  자동 처리
+                </span>
+              </div>
+              <p className="text-sm text-gray-500 mt-2">
+                {autoProcessMode === 'auto'
+                  ? '문의 접수 → AI 분석 → 서버 수정까지 자동으로 진행됩니다. 텔레그램 승인 없이 바로 실행합니다.'
+                  : '문의 접수 → AI 분석 후 텔레그램으로 승인 요청을 보냅니다. 관리자 승인 후 서버 수정이 진행됩니다.'}
+              </p>
+            </div>
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold ${
+              autoProcessMode === 'auto'
+                ? 'bg-green-100 text-green-700'
+                : 'bg-amber-100 text-amber-700'
+            }`}>
+              {autoProcessMode === 'auto' ? (
+                <><ToggleRight className="h-4 w-4" /> 자동</>
+              ) : (
+                <><ToggleLeft className="h-4 w-4" /> 수동</>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-4">
+            <div className={`p-4 rounded-lg border-2 ${autoProcessMode === 'manual' ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200'}`}>
+              <h4 className="font-semibold text-sm mb-2">수동 처리 모드</h4>
+              <ul className="text-xs text-gray-600 space-y-1">
+                <li>• 문의 접수 → AI 분석</li>
+                <li>• PDCA + 영향도 분석</li>
+                <li>• 텔레그램 승인 요청</li>
+                <li>• <strong>관리자 승인 후</strong> 서버 수정</li>
+              </ul>
+            </div>
+            <div className={`p-4 rounded-lg border-2 ${autoProcessMode === 'auto' ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200'}`}>
+              <h4 className="font-semibold text-sm mb-2">자동 처리 모드</h4>
+              <ul className="text-xs text-gray-600 space-y-1">
+                <li>• 문의 접수 → AI 분석</li>
+                <li>• PDCA + 영향도 분석</li>
+                <li>• 텔레그램 알림 (보고용)</li>
+                <li>• <strong>승인 없이</strong> 바로 서버 수정</li>
+              </ul>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
