@@ -687,7 +687,7 @@ PROMPT;
 }
 
 // Phase 5: 서버 수정 실행 — Claude CLI가 SSH로 서버 접속하여 수정 작업 수행
-function executeFixWithClaude($pdcaPlan, $serverInfo) {
+function executeFixWithClaude($pdcaPlan, $serverInfo, $postId = null, $postTitle = '') {
     if (empty($serverInfo) || empty($serverInfo['server_ip']) || empty($serverInfo['ssh_password'])) {
         throw new Exception('서버 접속 정보가 없어 실행할 수 없습니다.');
     }
@@ -704,6 +704,7 @@ function executeFixWithClaude($pdcaPlan, $serverInfo) {
     $user = $serverInfo['ssh_user'] ?: 'root';
     $password = $serverInfo['ssh_password'];
     $siteUrl = $serverInfo['site_url'] ?: '';
+    $siteName = $serverInfo['site_name'] ?? $postTitle;
 
     $prompt = <<<PROMPT
 당신은 서버 운영 엔지니어입니다. 아래 PDCA 수정 계획에 따라 서버에서 수정 작업을 수행해주세요.
@@ -747,21 +748,99 @@ PROMPT;
     $escapedPrompt = escapeshellarg($prompt);
     $command = CLAUDE_CLI_PATH . ' -p ' . $escapedPrompt . ' --allowedTools "Bash(command:*)" --output-format text 2>&1';
 
-    $outputLines = [];
-    $returnCode = null;
-    exec($command, $outputLines, $returnCode);
-    $output = implode("\n", $outputLines);
+    // proc_open으로 실행하여 실시간 출력 읽기 + 1분마다 텔레그램 진행 보고
+    $descriptors = [
+        0 => ['pipe', 'r'],  // stdin
+        1 => ['pipe', 'r'],  // stdout
+        2 => ['pipe', 'r'],  // stderr
+    ];
+
+    $process = proc_open($command, $descriptors, $pipes);
+    if (!is_resource($process)) {
+        throw new Exception('Claude CLI 프로세스 시작 실패');
+    }
+
+    fclose($pipes[0]); // stdin 닫기
+    stream_set_blocking($pipes[1], false);
+    stream_set_blocking($pipes[2], false);
+
+    $output = '';
+    $lastReportTime = time();
+    $startTime = time();
+    $reportCount = 0;
+    $postLabel = $postId ? "#{$postId}" : '';
+
+    // 시작 알림
+    sendTelegramNotification("🚀 서버 수정 작업 시작\n게시글 {$postLabel}: {$postTitle}\n🏢 사이트: {$siteName}\n⏱ 시작 시간: " . date('H:i:s'));
+
+    while (true) {
+        $stdout = fgets($pipes[1]);
+        $stderr = fgets($pipes[2]);
+
+        if ($stdout !== false) {
+            $output .= $stdout;
+        }
+        if ($stderr !== false) {
+            $output .= $stderr;
+        }
+
+        // 프로세스 종료 확인
+        $status = proc_get_status($process);
+        if (!$status['running']) {
+            // 남은 출력 읽기
+            $output .= stream_get_contents($pipes[1]);
+            $output .= stream_get_contents($pipes[2]);
+            break;
+        }
+
+        // 1분마다 텔레그램 진행 보고
+        $now = time();
+        if ($now - $lastReportTime >= 60) {
+            $reportCount++;
+            $elapsed = $now - $startTime;
+            $elapsedMin = floor($elapsed / 60);
+
+            // 최근 출력에서 마지막 300자 추출 (진행 상황 파악용)
+            $recentOutput = mb_substr($output, -300);
+            // 줄바꿈 기준으로 마지막 5줄
+            $recentLines = array_slice(explode("\n", trim($recentOutput)), -5);
+            $recentSummary = implode("\n", $recentLines);
+
+            $progressMsg = "⏳ 작업 진행 중 ({$elapsedMin}분 경과)\n";
+            $progressMsg .= "게시글 {$postLabel}: {$postTitle}\n";
+            $progressMsg .= "🏢 사이트: {$siteName}\n\n";
+            $progressMsg .= "📝 최근 로그:\n{$recentSummary}";
+
+            sendTelegramNotification($progressMsg);
+            $lastReportTime = $now;
+        }
+
+        usleep(100000); // 0.1초 대기 (CPU 절약)
+    }
+
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $returnCode = proc_close($process);
+
+    $elapsed = time() - $startTime;
+    $elapsedMin = floor($elapsed / 60);
+    $elapsedSec = $elapsed % 60;
 
     if ($returnCode !== 0 || empty(trim($output))) {
+        sendTelegramNotification("❌ 서버 수정 실패 ({$elapsedMin}분 {$elapsedSec}초 소요)\n게시글 {$postLabel}: {$postTitle}\n오류 코드: {$returnCode}");
         throw new Exception('Phase 5 (서버 수정 실행) 실패 (code: ' . $returnCode . '): ' . substr($output, 0, 500));
     }
 
     // 위험 명령 실행 여부 체크
     foreach ($dangerousPatterns as $pattern) {
         if (stripos($output, $pattern) !== false) {
+            sendTelegramNotification("🚨 위험 명령 감지!\n게시글 {$postLabel}: {$postTitle}\n감지된 패턴: {$pattern}");
             throw new Exception('위험한 명령이 감지되었습니다: ' . $pattern);
         }
     }
+
+    // 완료 알림
+    sendTelegramNotification("✅ 서버 수정 완료 ({$elapsedMin}분 {$elapsedSec}초 소요)\n게시글 {$postLabel}: {$postTitle}\n관리자 확인 대기 중...");
 
     return trim($output);
 }

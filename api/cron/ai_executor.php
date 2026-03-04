@@ -108,7 +108,7 @@ try {
 
         // Claude Code CLI로 서버 수정 실행
         logMsg("게시글 #{$post['id']}: 서버 수정 실행 중 ({$serverInfo['server_ip']})...");
-        $executionResult = executeFixWithClaude($pdcaPlan, $serverInfo);
+        $executionResult = executeFixWithClaude($pdcaPlan, $serverInfo, $post['id'], $post['title']);
         logMsg("게시글 #{$post['id']}: 서버 수정 실행 완료");
 
         // 실행 결과 저장
