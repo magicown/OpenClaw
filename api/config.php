@@ -750,9 +750,9 @@ PROMPT;
 
     // proc_open으로 실행하여 실시간 출력 읽기 + 1분마다 텔레그램 진행 보고
     $descriptors = [
-        0 => ['pipe', 'r'],  // stdin
-        1 => ['pipe', 'r'],  // stdout
-        2 => ['pipe', 'r'],  // stderr
+        0 => ['pipe', 'r'],  // stdin (child reads)
+        1 => ['pipe', 'w'],  // stdout (child writes)
+        2 => ['pipe', 'w'],  // stderr (child writes)
     ];
 
     $process = proc_open($command, $descriptors, $pipes);
