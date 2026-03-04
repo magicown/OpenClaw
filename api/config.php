@@ -746,7 +746,7 @@ function executeFixWithClaude($pdcaPlan, $serverInfo, $postId = null, $postTitle
 PROMPT;
 
     $escapedPrompt = escapeshellarg($prompt);
-    $command = CLAUDE_CLI_PATH . ' -p ' . $escapedPrompt . ' --allowedTools "Bash(command:*)" --output-format text 2>&1';
+    $command = CLAUDE_CLI_PATH . ' -p ' . $escapedPrompt . ' --dangerouslySkipPermissions --output-format text 2>&1';
 
     // proc_open으로 실행하여 실시간 출력 읽기 + 1분마다 텔레그램 진행 보고
     $descriptors = [
@@ -893,7 +893,7 @@ function executeAdminCommand($commandText, $serverInfo, $postId = null) {
 PROMPT;
 
     $escapedPrompt = escapeshellarg($prompt);
-    $command = CLAUDE_CLI_PATH . ' -p ' . $escapedPrompt . ' --allowedTools "Bash(command:*)" --output-format text 2>&1';
+    $command = CLAUDE_CLI_PATH . ' -p ' . $escapedPrompt . ' --dangerouslySkipPermissions --output-format text 2>&1';
 
     $outputLines = [];
     $returnCode = null;
@@ -964,7 +964,7 @@ QNA 게시판 시스템에서 에러가 발생했습니다. 에러를 분석하�
 PROMPT;
 
     $escapedPrompt = escapeshellarg($prompt);
-    $command = CLAUDE_CLI_PATH . ' -p ' . $escapedPrompt . ' --allowedTools "Bash(command:*)" --output-format text 2>&1';
+    $command = CLAUDE_CLI_PATH . ' -p ' . $escapedPrompt . ' --dangerouslySkipPermissions --output-format text 2>&1';
 
     $outputLines = [];
     $returnCode = null;
