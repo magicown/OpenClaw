@@ -137,6 +137,23 @@ try {
     logMsg("명령 #{$cmd['id']} 실행 " . ($success ? '완료' : '실패'));
 
 } catch (Exception $e) {
-    logMsg('치명적 오류: ' . $e->getMessage());
+    $errorMsg = $e->getMessage();
+    logMsg('치명적 오류: ' . $errorMsg);
+
+    sendTelegramNotification("⚠️ 명령 실행기 오류\n오류: {$errorMsg}\n\n🔧 자동 복구 시도 중...");
+
+    $repair = selfRepairWithClaude($errorMsg, [
+        'log_file' => '/home/qna-board/logs/ai_command.log',
+        'source_file' => __DIR__ . '/../config.php',
+        'phase' => '관리자 명령 실행',
+        'post_id' => $cmd['id'] ?? '',
+    ]);
+
+    if ($repair['success']) {
+        sendTelegramNotification("✅ 자동 복구 완료 (명령 실행기)\n\n" . mb_substr($repair['output'], 0, 500) . "\n\n🔄 다음 크론에서 재시도됩니다.");
+    } else {
+        sendTelegramNotification("❌ 자동 복구 실패 (명령 실행기)\n오류: {$errorMsg}");
+    }
+
     exit(1);
 }

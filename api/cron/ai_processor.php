@@ -156,18 +156,30 @@ try {
 
         } catch (Exception $e) {
             if ($db->inTransaction()) $db->rollBack();
-            logMsg("게시글 #{$post['id']} Phase 1 실패: " . $e->getMessage());
+            $errorMsg = $e->getMessage();
+            logMsg("게시글 #{$post['id']} Phase 1 실패: {$errorMsg}");
 
-            // 실패 시 복구
-            try {
-                $db->prepare("UPDATE posts SET status = 'registered' WHERE id = ? AND status = 'ai_preprocess'")->execute([$post['id']]);
-                $db->prepare("DELETE FROM process_logs WHERE post_id = ? AND step = 'ai_preprocess' ORDER BY created_at DESC LIMIT 1")->execute([$post['id']]);
-                logMsg("게시글 #{$post['id']}: registered로 복구 완료");
-            } catch (Exception $ex) {
-                logMsg("게시글 #{$post['id']}: 복구 실패 - " . $ex->getMessage());
+            sendTelegramNotification("⚠️ AI Phase 1 오류\n게시글 #{$post['id']}: {$post['title']}\n오류: {$errorMsg}\n\n🔧 자동 복구 시도 중...");
+
+            $repair = selfRepairWithClaude($errorMsg, [
+                'log_file' => '/home/qna-board/logs/ai_processor.log',
+                'source_file' => __DIR__ . '/../config.php',
+                'phase' => 'Phase 1 (문의 정리)',
+                'post_id' => $post['id'],
+            ]);
+
+            if ($repair['success']) {
+                logMsg("게시글 #{$post['id']}: 자동 복구 완료 — registered로 복구하여 재시도 예약");
+                try {
+                    $db->prepare("UPDATE posts SET status = 'registered' WHERE id = ? AND status = 'ai_preprocess'")->execute([$post['id']]);
+                } catch (Exception $ex) {}
+                sendTelegramNotification("✅ 자동 복구 완료 (Phase 1)\n게시글 #{$post['id']}\n\n" . mb_substr($repair['output'], 0, 500) . "\n\n🔄 다음 크론에서 재시도됩니다.");
+            } else {
+                try {
+                    $db->prepare("UPDATE posts SET status = 'registered' WHERE id = ? AND status = 'ai_preprocess'")->execute([$post['id']]);
+                } catch (Exception $ex) {}
+                sendTelegramNotification("❌ 자동 복구 실패 (Phase 1)\n게시글 #{$post['id']}: {$post['title']}\n오류: {$errorMsg}");
             }
-
-            sendTelegramNotification("⚠️ AI Phase 1 오류\n게시글 #{$post['id']}: {$post['title']}\n오류: " . $e->getMessage());
         }
 
         sleep(2);
@@ -270,16 +282,30 @@ try {
 
         } catch (Exception $e) {
             if ($db->inTransaction()) $db->rollBack();
-            logMsg("게시글 #{$post['id']} Phase 2 실패: " . $e->getMessage());
+            $errorMsg = $e->getMessage();
+            logMsg("게시글 #{$post['id']} Phase 2 실패: {$errorMsg}");
 
-            try {
-                $db->prepare("UPDATE posts SET status = 'ai_preprocess' WHERE id = ? AND status = 'ai_pdca'")->execute([$post['id']]);
-                logMsg("게시글 #{$post['id']}: ai_preprocess로 복구 완료");
-            } catch (Exception $ex) {
-                logMsg("게시글 #{$post['id']}: 복구 실패 - " . $ex->getMessage());
+            sendTelegramNotification("⚠️ AI Phase 2 오류\n게시글 #{$post['id']}: {$post['title']}\n오류: {$errorMsg}\n\n🔧 자동 복구 시도 중...");
+
+            $repair = selfRepairWithClaude($errorMsg, [
+                'log_file' => '/home/qna-board/logs/ai_processor.log',
+                'source_file' => __DIR__ . '/../config.php',
+                'phase' => 'Phase 2 (PDCA 분석)',
+                'post_id' => $post['id'],
+            ]);
+
+            if ($repair['success']) {
+                logMsg("게시글 #{$post['id']}: 자동 복구 완료 — ai_preprocess로 복구하여 재시도 예약");
+                try {
+                    $db->prepare("UPDATE posts SET status = 'ai_preprocess' WHERE id = ? AND status = 'ai_pdca'")->execute([$post['id']]);
+                } catch (Exception $ex) {}
+                sendTelegramNotification("✅ 자동 복구 완료 (Phase 2)\n게시글 #{$post['id']}\n\n" . mb_substr($repair['output'], 0, 500) . "\n\n🔄 다음 크론에서 재시도됩니다.");
+            } else {
+                try {
+                    $db->prepare("UPDATE posts SET status = 'ai_preprocess' WHERE id = ? AND status = 'ai_pdca'")->execute([$post['id']]);
+                } catch (Exception $ex) {}
+                sendTelegramNotification("❌ 자동 복구 실패 (Phase 2)\n게시글 #{$post['id']}: {$post['title']}\n오류: {$errorMsg}");
             }
-
-            sendTelegramNotification("⚠️ AI Phase 2 오류\n게시글 #{$post['id']}: {$post['title']}\n오류: " . $e->getMessage());
         }
 
         sleep(2);
@@ -427,16 +453,30 @@ try {
 
         } catch (Exception $e) {
             if ($db->inTransaction()) $db->rollBack();
-            logMsg("게시글 #{$post['id']} Phase 3 실패: " . $e->getMessage());
+            $errorMsg = $e->getMessage();
+            logMsg("게시글 #{$post['id']} Phase 3 실패: {$errorMsg}");
 
-            try {
-                $db->prepare("UPDATE posts SET status = 'ai_pdca' WHERE id = ? AND status IN ('ai_impact', 'pending_approval')")->execute([$post['id']]);
-                logMsg("게시글 #{$post['id']}: ai_pdca로 복구 완료");
-            } catch (Exception $ex) {
-                logMsg("게시글 #{$post['id']}: 복구 실패 - " . $ex->getMessage());
+            sendTelegramNotification("⚠️ AI Phase 3 오류\n게시글 #{$post['id']}: {$post['title']}\n오류: {$errorMsg}\n\n🔧 자동 복구 시도 중...");
+
+            $repair = selfRepairWithClaude($errorMsg, [
+                'log_file' => '/home/qna-board/logs/ai_processor.log',
+                'source_file' => __DIR__ . '/../config.php',
+                'phase' => 'Phase 3 (영향도 분석)',
+                'post_id' => $post['id'],
+            ]);
+
+            if ($repair['success']) {
+                logMsg("게시글 #{$post['id']}: 자동 복구 완료 — ai_pdca로 복구하여 재시도 예약");
+                try {
+                    $db->prepare("UPDATE posts SET status = 'ai_pdca' WHERE id = ? AND status IN ('ai_impact', 'pending_approval')")->execute([$post['id']]);
+                } catch (Exception $ex) {}
+                sendTelegramNotification("✅ 자동 복구 완료 (Phase 3)\n게시글 #{$post['id']}\n\n" . mb_substr($repair['output'], 0, 500) . "\n\n🔄 다음 크론에서 재시도됩니다.");
+            } else {
+                try {
+                    $db->prepare("UPDATE posts SET status = 'ai_pdca' WHERE id = ? AND status IN ('ai_impact', 'pending_approval')")->execute([$post['id']]);
+                } catch (Exception $ex) {}
+                sendTelegramNotification("❌ 자동 복구 실패 (Phase 3)\n게시글 #{$post['id']}: {$post['title']}\n오류: {$errorMsg}");
             }
-
-            sendTelegramNotification("⚠️ AI Phase 3 오류\n게시글 #{$post['id']}: {$post['title']}\n오류: " . $e->getMessage());
         }
 
         sleep(2);

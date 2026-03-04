@@ -153,26 +153,53 @@ try {
 
     } catch (Exception $e) {
         if ($db->inTransaction()) $db->rollBack();
-        logMsg("게시글 #{$post['id']} 실행 실패: " . $e->getMessage());
+        $errorMessage = $e->getMessage();
+        logMsg("게시글 #{$post['id']} 실행 실패: {$errorMessage}");
 
-        // 실행 실패 시 rework으로 전환 (관리자 재검토)
-        try {
-            $db->prepare("UPDATE posts SET status = 'admin_confirm' WHERE id = ? AND status = 'ai_execution'")->execute([$post['id']]);
-            $db->prepare("INSERT INTO process_logs (post_id, step, content) VALUES (?, 'admin_confirm', ?)")
-                ->execute([$post['id'], "서버 수정 실행 중 오류가 발생했습니다.\n오류: " . $e->getMessage() . "\n\n관리자 확인이 필요합니다."]);
-            logMsg("게시글 #{$post['id']}: admin_confirm으로 전환 (실행 오류)");
-        } catch (Exception $ex) {
-            logMsg("게시글 #{$post['id']}: 상태 복구 실패 - " . $ex->getMessage());
+        // 텔레그램 에러 보고
+        sendTelegramNotification("⚠️ 서버 수정 실행 오류\n게시글 #{$post['id']}: {$post['title']}\n오류: {$errorMessage}\n\n🔧 자동 복구를 시도합니다...");
+
+        // 자동 복구 시도
+        logMsg("게시글 #{$post['id']}: 자동 복구 시도 중...");
+        $repairResult = selfRepairWithClaude($errorMessage, [
+            'log_file' => '/home/qna-board/logs/ai_executor.log',
+            'source_file' => __DIR__ . '/../config.php',
+            'phase' => 'ai_execution',
+            'post_id' => $post['id'],
+        ]);
+
+        if ($repairResult['success']) {
+            logMsg("게시글 #{$post['id']}: 자동 복구 완료 — 재실행 예약");
+
+            // 복구 성공: status를 ai_execution으로 유지하여 다음 크론에서 재실행
+            try {
+                $db->prepare("INSERT INTO process_logs (post_id, step, content) VALUES (?, 'ai_execution', ?)")
+                    ->execute([$post['id'], "자동 복구 완료. 재실행 예약됨.\n\n" . mb_substr($repairResult['output'], 0, 500)]);
+
+                $db->prepare("INSERT INTO execution_logs (post_id, command, output, exit_code) VALUES (?, ?, ?, ?)")
+                    ->execute([$post['id'], '자동 복구 (selfRepair)', $repairResult['output'], 0]);
+            } catch (Exception $logEx) {}
+
+            sendTelegramNotification("✅ 자동 복구 완료\n게시글 #{$post['id']}: {$post['title']}\n\n📋 복구 내용:\n" . mb_substr($repairResult['output'], 0, 500) . "\n\n🔄 다음 크론에서 재실행됩니다.");
+        } else {
+            logMsg("게시글 #{$post['id']}: 자동 복구 실패 — admin_confirm으로 전환");
+
+            // 복구 실패: admin_confirm으로 전환
+            try {
+                $db->prepare("UPDATE posts SET status = 'admin_confirm' WHERE id = ? AND status = 'ai_execution'")->execute([$post['id']]);
+                $db->prepare("INSERT INTO process_logs (post_id, step, content) VALUES (?, 'admin_confirm', ?)")
+                    ->execute([$post['id'], "서버 수정 실행 중 오류 + 자동 복구 실패\n오류: {$errorMessage}\n\n복구 시도 결과:\n" . mb_substr($repairResult['output'], 0, 300) . "\n\n관리자 확인이 필요합니다."]);
+            } catch (Exception $ex) {
+                logMsg("게시글 #{$post['id']}: 상태 복구 실패 - " . $ex->getMessage());
+            }
+
+            try {
+                $db->prepare("INSERT INTO execution_logs (post_id, command, output, exit_code) VALUES (?, ?, ?, ?)")
+                    ->execute([$post['id'], 'Claude Code CLI 자동 실행 + 자동 복구 실패', "원본 오류: {$errorMessage}\n\n복구 시도:\n" . $repairResult['output'], 1]);
+            } catch (Exception $logEx) {}
+
+            sendTelegramNotification("❌ 자동 복구 실패\n게시글 #{$post['id']}: {$post['title']}\n\n원본 오류: {$errorMessage}\n\n관리자 확인이 필요합니다.");
         }
-
-        // 실행 실패 로그
-        try {
-            $db->prepare("INSERT INTO execution_logs (post_id, command, output, exit_code) VALUES (?, ?, ?, ?)")
-                ->execute([$post['id'], 'Claude Code CLI 자동 실행', '오류: ' . $e->getMessage(), 1]);
-        } catch (Exception $logEx) {}
-
-        $errorMsg = "⚠️ 서버 수정 실행 오류\n게시글 #{$post['id']}: {$post['title']}\n오류: " . $e->getMessage();
-        sendTelegramNotification($errorMsg);
     }
 
     logMsg('AI 실행기 완료');

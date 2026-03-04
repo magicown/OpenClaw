@@ -910,6 +910,76 @@ PROMPT;
     return ['success' => true, 'output' => trim($output)];
 }
 
+// 시스템 자동 복구 — 에러 발생 시 Claude CLI가 직접 진단 + 수정
+function selfRepairWithClaude($errorMessage, $context = []) {
+    $logFile = $context['log_file'] ?? '';
+    $sourceFile = $context['source_file'] ?? '';
+    $phase = $context['phase'] ?? 'unknown';
+    $postId = $context['post_id'] ?? '';
+
+    // 에러 로그에서 최근 50줄 가져오기
+    $recentLog = '';
+    if ($logFile && file_exists($logFile)) {
+        $lines = file($logFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        $recentLog = implode("\n", array_slice($lines, -50));
+    }
+
+    // 소스 파일 내용 가져오기 (에러가 발생한 파일)
+    $sourceContent = '';
+    if ($sourceFile && file_exists($sourceFile)) {
+        $sourceContent = file_get_contents($sourceFile);
+    }
+
+    $prompt = <<<PROMPT
+당신은 서버 시스템 자동 복구 엔지니어입니다.
+QNA 게시판 시스템에서 에러가 발생했습니다. 에러를 분석하고 직접 코드를 수정하세요.
+
+에러 정보:
+- 단계: {$phase}
+- 게시글: #{$postId}
+- 에러 메시지: {$errorMessage}
+
+최근 로그:
+{$recentLog}
+
+규칙:
+1. 에러 원인을 정확히 파악하세요
+2. 해당 파일의 코드를 직접 수정하세요
+3. 수정 후 PHP 문법 오류가 없는지 확인하세요 (php -l)
+4. 시스템 파일 삭제, DB DROP 등 위험한 작업은 절대 금지
+5. 수정 범위를 에러 관련 부분으로 최소화하세요
+
+보고 형식:
+📋 자동 복구 보고서
+
+원인 분석:
+- (에러 원인 설명)
+
+수정 내용:
+- (어떤 파일의 어떤 부분을 어떻게 수정했는지)
+
+수정 결과:
+- 상태: (성공/실패)
+- PHP 문법 검증: (통과/실패)
+PROMPT;
+
+    $escapedPrompt = escapeshellarg($prompt);
+    $command = CLAUDE_CLI_PATH . ' -p ' . $escapedPrompt . ' --allowedTools "Bash(command:*)" --output-format text 2>&1';
+
+    $outputLines = [];
+    $returnCode = null;
+    exec($command, $outputLines, $returnCode);
+    $output = implode("\n", $outputLines);
+
+    $success = ($returnCode === 0 && !empty(trim($output)));
+
+    return [
+        'success' => $success,
+        'output' => trim($output),
+        'return_code' => $returnCode,
+    ];
+}
+
 // AI 답변 생성 (Claude Code CLI)
 function generateAIAnswer($question) {
     $prompt = "당신은 Q&A 게시판의 친절한 AI 어시스턴트입니다. 사용자의 질문에 한국어로 명확하고 도움이 되는 답변을 해주세요.\n\n질문: {$question}";
