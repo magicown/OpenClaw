@@ -31,24 +31,42 @@ switch ($method) {
             jsonResponse(['error' => 'Missing required fields'], 400);
         }
 
+        $content = $data['content'];
+        $isAdminCommand = 0;
+        $commandStatus = null;
+
+        // /cmd 접두사 감지 → 관리자 명령으로 등록
+        if (preg_match('/^\/cmd\s+(.+)$/s', $content, $cmdMatch)) {
+            $isAdminCommand = 1;
+            $commandStatus = 'pending';
+        }
+
         try {
             $stmt = $db->prepare("
-                INSERT INTO comments (post_id, content, author_name, is_ai_answer)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO comments (post_id, content, author_name, is_ai_answer, is_admin_command, command_status)
+                VALUES (?, ?, ?, ?, ?, ?)
             ");
             $stmt->execute([
                 $data['post_id'],
-                $data['content'],
+                $content,
                 $admin['display_name'],
-                (int)($data['is_ai_answer'] ?? false)
+                (int)($data['is_ai_answer'] ?? false),
+                $isAdminCommand,
+                $commandStatus,
             ]);
 
             $commentId = $db->lastInsertId();
 
-            // 답변 등록 시 게시글 상태 업데이트
-            $db->prepare("UPDATE posts SET status = 'answered' WHERE id = ?")->execute([$data['post_id']]);
+            // /cmd가 아닌 일반 댓글일 때만 answered로 변경
+            if (!$isAdminCommand) {
+                $db->prepare("UPDATE posts SET status = 'answered' WHERE id = ?")->execute([$data['post_id']]);
+            }
 
-            jsonResponse(['message' => 'Comment created successfully', 'comment_id' => $commentId], 201);
+            jsonResponse([
+                'message' => $isAdminCommand ? '명령이 등록되었습니다. 잠시 후 자동 실행됩니다.' : 'Comment created successfully',
+                'comment_id' => $commentId,
+                'is_command' => $isAdminCommand,
+            ], 201);
 
         } catch (Exception $e) {
             jsonResponse(['error' => $e->getMessage()], 500);

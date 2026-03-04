@@ -845,6 +845,71 @@ PROMPT;
     return trim($output);
 }
 
+// 관리자 명령 실행 — Claude CLI로 서버에서 직접 명령 수행
+function executeAdminCommand($commandText, $serverInfo, $postId = null) {
+    if (empty($serverInfo) || empty($serverInfo['server_ip']) || empty($serverInfo['ssh_password'])) {
+        return ['success' => false, 'output' => '서버 접속 정보가 없습니다.'];
+    }
+
+    $ip = $serverInfo['server_ip'];
+    $user = $serverInfo['ssh_user'] ?: 'root';
+    $password = $serverInfo['ssh_password'];
+    $siteUrl = $serverInfo['site_url'] ?? '';
+
+    // 위험 명령 차단
+    $dangerousPatterns = [
+        'rm -rf /', 'mkfs', 'dd if=', ':(){', 'chmod -R 777 /',
+        'shutdown', 'reboot', 'halt', 'poweroff',
+        'DROP DATABASE', 'TRUNCATE',
+        '> /dev/sda', 'format c:',
+    ];
+    foreach ($dangerousPatterns as $pattern) {
+        if (stripos($commandText, $pattern) !== false) {
+            return ['success' => false, 'output' => "⛔ 위험 명령 차단: {$pattern}"];
+        }
+    }
+
+    $prompt = <<<PROMPT
+서버에서 관리자가 요청한 작업을 수행하세요.
+
+서버 접속 정보:
+- IP: {$ip}
+- 사용자: {$user}
+- 비밀번호: {$password}
+- 사이트: {$siteUrl}
+
+관리자 요청:
+{$commandText}
+
+규칙:
+1. 요청한 작업만 정확히 수행하세요
+2. rm -rf /, DROP DATABASE, shutdown 등 위험한 명령은 절대 실행하지 마세요
+3. 작업 결과를 간결하게 보고하세요
+
+보고 형식:
+실행 결과:
+- [수행한 작업]: (결과 요약)
+- 상태: (성공/실패)
+PROMPT;
+
+    $escapedPrompt = escapeshellarg($prompt);
+    $command = CLAUDE_CLI_PATH . ' -p ' . $escapedPrompt . ' --allowedTools "Bash(command:*)" --output-format text 2>&1';
+
+    $outputLines = [];
+    $returnCode = null;
+    exec($command, $outputLines, $returnCode);
+    $output = implode("\n", $outputLines);
+
+    if ($returnCode !== 0 || empty(trim($output))) {
+        return [
+            'success' => false,
+            'output' => '명령 실행 실패 (code: ' . $returnCode . '): ' . substr($output, 0, 500),
+        ];
+    }
+
+    return ['success' => true, 'output' => trim($output)];
+}
+
 // AI 답변 생성 (Claude Code CLI)
 function generateAIAnswer($question) {
     $prompt = "당신은 Q&A 게시판의 친절한 AI 어시스턴트입니다. 사용자의 질문에 한국어로 명확하고 도움이 되는 답변을 해주세요.\n\n질문: {$question}";

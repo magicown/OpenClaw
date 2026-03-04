@@ -725,24 +725,42 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
                 <Card><CardContent className="py-6 text-center text-gray-500">아직 답변이 없습니다.</CardContent></Card>
               ) : (
                 <div className="space-y-3">
-                  {detailComments.map(comment => (
-                    <Card key={comment.id} className={comment.is_ai_answer ? 'border-purple-200 bg-purple-50/50' : ''}>
-                      <CardHeader className="pb-2">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium text-sm">{comment.author_name}</span>
-                          {comment.is_ai_answer && (
-                            <Badge variant="outline" className="text-purple-600 border-purple-300">
-                              <Bot className="h-3 w-3 mr-1" />AI
-                            </Badge>
+                  {detailComments.map(comment => {
+                    const isCommand = comment.content.startsWith('/cmd ');
+                    const isCommandResult = comment.content.startsWith('✅ 명령 실행 결과') || comment.content.startsWith('❌ 명령 실행 결과');
+                    return (
+                      <Card key={comment.id} className={
+                        isCommand ? 'border-amber-300 bg-amber-50/50' :
+                        isCommandResult ? 'border-emerald-300 bg-emerald-50/50' :
+                        comment.is_ai_answer ? 'border-purple-200 bg-purple-50/50' : ''
+                      }>
+                        <CardHeader className="pb-2">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-sm">{comment.author_name}</span>
+                            {isCommand && (
+                              <Badge variant="outline" className="text-amber-600 border-amber-300">⚡ 명령</Badge>
+                            )}
+                            {isCommandResult && (
+                              <Badge variant="outline" className="text-emerald-600 border-emerald-300">📋 실행결과</Badge>
+                            )}
+                            {comment.is_ai_answer && !isCommandResult && (
+                              <Badge variant="outline" className="text-purple-600 border-purple-300">
+                                <Bot className="h-3 w-3 mr-1" />AI
+                              </Badge>
+                            )}
+                            <span className="text-xs text-gray-400">{formatDate(comment.created_at)}</span>
+                          </div>
+                        </CardHeader>
+                        <CardContent>
+                          {isCommand ? (
+                            <pre className="whitespace-pre-wrap text-amber-800 text-sm font-mono bg-amber-100/50 p-2 rounded">{comment.content.replace(/^\/cmd\s+/, '')}</pre>
+                          ) : (
+                            <p className="whitespace-pre-wrap text-gray-700 text-sm leading-relaxed">{comment.is_ai_answer ? cleanMarkdown(comment.content) : comment.content}</p>
                           )}
-                          <span className="text-xs text-gray-400">{formatDate(comment.created_at)}</span>
-                        </div>
-                      </CardHeader>
-                      <CardContent>
-                        <p className="whitespace-pre-wrap text-gray-700 text-sm leading-relaxed">{comment.is_ai_answer ? cleanMarkdown(comment.content) : comment.content}</p>
-                      </CardContent>
-                    </Card>
-                  ))}
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -763,15 +781,20 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
                   <Textarea
                     value={commentContent}
                     onChange={e => setCommentContent(e.target.value)}
-                    placeholder="답변을 작성해주세요"
+                    placeholder="답변 작성 또는 /cmd 명령어로 서버 작업 실행&#10;예: /cmd nginx -t && systemctl reload nginx"
                     rows={4}
                     required
                   />
+                  {commentContent.startsWith('/cmd ') && (
+                    <div className="p-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-700">
+                      ⚡ 서버 명령 모드 — 등록 시 해당 사이트 서버에서 자동 실행됩니다
+                    </div>
+                  )}
                 </CardContent>
                 <CardFooter className="flex justify-end">
-                  <Button type="submit" disabled={commentSubmitting} className="bg-indigo-600 hover:bg-indigo-700">
+                  <Button type="submit" disabled={commentSubmitting} className={commentContent.startsWith('/cmd ') ? 'bg-amber-600 hover:bg-amber-700' : 'bg-indigo-600 hover:bg-indigo-700'}>
                     <Send className="h-4 w-4 mr-1" />
-                    {commentSubmitting ? '등록 중...' : '답변 등록'}
+                    {commentSubmitting ? '등록 중...' : commentContent.startsWith('/cmd ') ? '⚡ 명령 실행' : '답변 등록'}
                   </Button>
                 </CardFooter>
               </form>
