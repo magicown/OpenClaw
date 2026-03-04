@@ -82,7 +82,7 @@ export default function AdminEntry() {
               <Shield className="h-7 w-7 text-indigo-600" />
             </div>
             <CardTitle className="text-2xl">Q&A 관리자</CardTitle>
-            <CardDescription>관리자 계정으로 로그인하세요</CardDescription>
+            <CardDescription>관리자 계정으로 로그인하세요 </CardDescription>
           </CardHeader>
           <form onSubmit={handleLogin}>
             <CardContent className="space-y-4">

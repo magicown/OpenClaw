@@ -19,7 +19,12 @@ function App() {
     const checkAuth = async () => {
       try {
         const result = await authApi.check();
-        if (result.logged_in && result.user && result.user.role === 'user') {
+        if (result.logged_in && result.user) {
+          if (result.user.role === 'admin') {
+            // admin 유저가 유저 페이지에 접속하면 관리자 페이지로 리다이렉트
+            window.location.replace('https://adm.hn-000.com/');
+            return;
+          }
           setCurrentUser(result.user);
         }
       } catch {
@@ -41,8 +46,8 @@ function App() {
       const result = await authApi.login(loginUsername, loginPassword);
 
       if (result.user.role === 'admin') {
-        await authApi.logout();
-        setLoginError('일반 사용자 계정으로 로그인해주세요.');
+        // admin은 관리자 페이지로 리다이렉트
+        window.location.replace('https://adm.hn-000.com/');
         return;
       }
 

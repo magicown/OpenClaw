@@ -7,7 +7,32 @@ $db = getDB();
 switch ($method) {
     case 'GET':
         if (isset($_GET['post_id'])) {
-            // 특정 게시글의 프로세스 로그 조회
+            $postId = $_GET['post_id'];
+            $include = $_GET['include'] ?? '';
+
+            // AI 분석 결과 조회
+            if ($include === 'analysis') {
+                $stmt = $db->prepare("
+                    SELECT * FROM ai_analysis_results
+                    WHERE post_id = ?
+                    ORDER BY created_at ASC
+                ");
+                $stmt->execute([$postId]);
+                jsonResponse($stmt->fetchAll());
+            }
+
+            // 실행 로그 조회
+            if ($include === 'execution_logs') {
+                $stmt = $db->prepare("
+                    SELECT * FROM execution_logs
+                    WHERE post_id = ?
+                    ORDER BY executed_at ASC
+                ");
+                $stmt->execute([$postId]);
+                jsonResponse($stmt->fetchAll());
+            }
+
+            // 기본: 프로세스 로그 조회
             $stmt = $db->prepare("
                 SELECT pl.*, u.display_name as creator_name
                 FROM process_logs pl
@@ -15,7 +40,7 @@ switch ($method) {
                 WHERE pl.post_id = ?
                 ORDER BY pl.created_at ASC
             ");
-            $stmt->execute([$_GET['post_id']]);
+            $stmt->execute([$postId]);
             jsonResponse($stmt->fetchAll());
         } else {
             // 전체 게시글 + 현재 상태 목록 (관리자용 대시보드)
@@ -50,13 +75,17 @@ switch ($method) {
                 ORDER BY
                     CASE p.status
                         WHEN 'registered' THEN 1
-                        WHEN 'ai_review' THEN 2
-                        WHEN 'pending_approval' THEN 3
-                        WHEN 'ai_processing' THEN 4
-                        WHEN 'admin_confirm' THEN 5
-                        WHEN 'rework' THEN 6
-                        WHEN 'completed' THEN 7
-                        ELSE 8
+                        WHEN 'ai_preprocess' THEN 2
+                        WHEN 'ai_pdca' THEN 3
+                        WHEN 'ai_impact' THEN 4
+                        WHEN 'ai_review' THEN 5
+                        WHEN 'pending_approval' THEN 6
+                        WHEN 'ai_execution' THEN 7
+                        WHEN 'ai_processing' THEN 8
+                        WHEN 'admin_confirm' THEN 9
+                        WHEN 'rework' THEN 10
+                        WHEN 'completed' THEN 11
+                        ELSE 12
                     END,
                     p.created_at DESC
             ");
@@ -78,7 +107,7 @@ switch ($method) {
             jsonResponse(['error' => 'post_id와 step은 필수입니다.'], 400);
         }
 
-        $validSteps = ['registered', 'ai_review', 'pending_approval', 'ai_processing', 'completed', 'admin_confirm', 'rework'];
+        $validSteps = ['registered', 'ai_preprocess', 'ai_pdca', 'ai_impact', 'ai_review', 'pending_approval', 'ai_execution', 'ai_processing', 'completed', 'admin_confirm', 'rework'];
         if (!in_array($newStep, $validSteps)) {
             jsonResponse(['error' => '유효하지 않은 단계입니다.'], 400);
         }
@@ -94,8 +123,12 @@ switch ($method) {
         // 자동 로그 메시지
         $stepMessages = [
             'registered' => '문의글이 등록되었습니다.',
+            'ai_preprocess' => '문의 내용을 정리하고 있습니다.',
+            'ai_pdca' => '해결 방안을 분석하고 있습니다.',
+            'ai_impact' => '수정 작업의 영향을 분석하고 있습니다.',
             'ai_review' => 'AI가 문의 내용을 분석하고 있습니다.',
             'pending_approval' => '관리자 승인을 대기하고 있습니다.',
+            'ai_execution' => '서버 수정 작업을 실행하고 있습니다.',
             'ai_processing' => 'AI가 작업을 진행하고 있습니다.',
             'completed' => '작업이 완료되었습니다.',
             'admin_confirm' => '관리자 확인이 필요합니다.',

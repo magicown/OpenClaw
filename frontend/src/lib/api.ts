@@ -8,7 +8,7 @@ export interface Post {
   category: '긴급' | '오류' | '건의' | '추가개발' | '기타';
   user_display_name?: string;
   user_site?: string;
-  status: 'registered' | 'ai_review' | 'pending_approval' | 'ai_processing' | 'completed' | 'admin_confirm' | 'rework';
+  status: 'registered' | 'ai_preprocess' | 'ai_pdca' | 'ai_impact' | 'ai_review' | 'pending_approval' | 'ai_execution' | 'ai_processing' | 'completed' | 'admin_confirm' | 'rework';
   view_count: number;
   created_at: string;
   updated_at: string;
@@ -22,7 +22,7 @@ export interface Post {
 export interface ProcessLog {
   id: number;
   post_id: number;
-  step: 'registered' | 'ai_review' | 'pending_approval' | 'ai_processing' | 'completed' | 'admin_confirm' | 'rework';
+  step: 'registered' | 'ai_preprocess' | 'ai_pdca' | 'ai_impact' | 'ai_review' | 'pending_approval' | 'ai_execution' | 'ai_processing' | 'completed' | 'admin_confirm' | 'rework';
   content: string;
   created_by: number | null;
   creator_name: string | null;
@@ -248,7 +248,50 @@ export const processApi = {
     if (!response.ok) throw new Error('Failed to transition process');
     return response.json();
   },
+
+  // AI 분석 결과 조회
+  getAnalysisResults: async (postId: number) => {
+    const response = await fetch(`${API_BASE_URL}/process.php?post_id=${postId}&include=analysis`);
+    if (!response.ok) throw new Error('Failed to fetch analysis results');
+    return response.json() as Promise<AIAnalysisResult[]>;
+  },
+
+  // 실행 로그 조회
+  getExecutionLogs: async (postId: number) => {
+    const response = await fetch(`${API_BASE_URL}/process.php?post_id=${postId}&include=execution_logs`);
+    if (!response.ok) throw new Error('Failed to fetch execution logs');
+    return response.json() as Promise<ExecutionLog[]>;
+  },
 };
+
+// AI 분석 결과 인터페이스
+export interface AIAnalysisResult {
+  id: number;
+  post_id: number;
+  phase: 'preprocess' | 'pdca' | 'impact' | 'execution';
+  iteration: number;
+  organized_question: string | null;
+  pdca_plan: string | null;
+  impact_analysis: string | null;
+  execution_result: string | null;
+  raw_claude_output: string | null;
+  admin_feedback: string | null;
+  status: 'pending' | 'completed' | 'failed';
+  created_at: string;
+}
+
+// 실행 로그 인터페이스
+export interface ExecutionLog {
+  id: number;
+  post_id: number;
+  analysis_id: number | null;
+  server_id: number | null;
+  command: string;
+  output: string | null;
+  exit_code: number | null;
+  rollback_command: string | null;
+  executed_at: string;
+}
 
 // 파일 업로드 API
 export const uploadApi = {

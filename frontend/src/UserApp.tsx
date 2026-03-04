@@ -131,11 +131,15 @@ function UserApp({ currentUser, onLogout }: UserAppProps) {
   const getStatusBadge = (status: string) => {
     const statusMap: Record<string, { text: string; className: string }> = {
       registered: { text: '문의 등록', className: 'bg-blue-100 text-blue-700 border-blue-300' },
+      ai_preprocess: { text: '확인 중', className: 'bg-purple-100 text-purple-700 border-purple-300' },
+      ai_pdca: { text: '확인 중', className: 'bg-purple-100 text-purple-700 border-purple-300' },
+      ai_impact: { text: '확인 중', className: 'bg-purple-100 text-purple-700 border-purple-300' },
       ai_review: { text: '확인 중', className: 'bg-purple-100 text-purple-700 border-purple-300' },
       pending_approval: { text: '승인 대기', className: 'bg-amber-100 text-amber-700 border-amber-300' },
+      ai_execution: { text: '작업 중', className: 'bg-cyan-100 text-cyan-700 border-cyan-300' },
       ai_processing: { text: '작업 중', className: 'bg-cyan-100 text-cyan-700 border-cyan-300' },
       completed: { text: '완료', className: 'bg-green-100 text-green-700 border-green-300' },
-      admin_confirm: { text: '승인 대기', className: 'bg-amber-100 text-amber-700 border-amber-300' },
+      admin_confirm: { text: '확인 중', className: 'bg-amber-100 text-amber-700 border-amber-300' },
       rework: { text: '작업 중', className: 'bg-cyan-100 text-cyan-700 border-cyan-300' },
       // Legacy statuses for backward compatibility
       pending: { text: '대기 중', className: 'bg-gray-100 text-gray-700 border-gray-300' },
@@ -190,19 +194,23 @@ function UserApp({ currentUser, onLogout }: UserAppProps) {
   };
 
   // 처리 단계 진행 표시 컴포넌트
-  const MAIN_STEPS = ['registered', 'ai_review', 'ai_processing', 'pending_approval', 'completed'] as const;
+  const MAIN_STEPS = ['registered', 'ai_preprocess', 'ai_pdca', 'pending_approval', 'ai_execution', 'completed'] as const;
   const STEP_LABELS: Record<string, string> = {
     registered: '문의 등록',
+    ai_preprocess: '문의 정리',
+    ai_pdca: '분석 중',
+    ai_impact: '영향 분석',
     ai_review: '확인 중',
     pending_approval: '승인 대기',
+    ai_execution: '수정 중',
     ai_processing: '작업 중',
     completed: '완료',
-    admin_confirm: '승인 대기',
+    admin_confirm: '최종 확인',
     rework: '재작업',
   };
 
   const ProcessStepIndicator = ({ status, compact = false }: { status: string; compact?: boolean }) => {
-    const isSpecialStatus = status === 'admin_confirm' || status === 'rework';
+    const isSpecialStatus = status === 'admin_confirm' || status === 'rework' || status === 'ai_impact';
     const currentMainIndex = MAIN_STEPS.indexOf(status as typeof MAIN_STEPS[number]);
 
     if (compact) {
@@ -212,6 +220,8 @@ function UserApp({ currentUser, onLogout }: UserAppProps) {
             <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
               status === 'admin_confirm'
                 ? 'bg-indigo-100 text-indigo-700'
+                : status === 'ai_impact'
+                ? 'bg-purple-100 text-purple-700'
                 : 'bg-red-100 text-red-700'
             }`}>
               {status === 'admin_confirm' ? <AlertTriangle className="h-3 w-3" /> : <Activity className="h-3 w-3" />}
@@ -252,6 +262,8 @@ function UserApp({ currentUser, onLogout }: UserAppProps) {
             <span className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold ${
               status === 'admin_confirm'
                 ? 'bg-indigo-100 text-indigo-700 border border-indigo-300'
+                : status === 'ai_impact'
+                ? 'bg-purple-100 text-purple-700 border border-purple-300'
                 : 'bg-red-100 text-red-700 border border-red-300'
             }`}>
               {status === 'admin_confirm' ? <AlertTriangle className="h-4 w-4" /> : <Activity className="h-4 w-4" />}
@@ -306,8 +318,12 @@ function UserApp({ currentUser, onLogout }: UserAppProps) {
   // 사용자용 간단 상태 메시지 (AI 분석 내용 숨김)
   const USER_STEP_MESSAGES: Record<string, string> = {
     registered: '문의가 접수되었습니다.',
+    ai_preprocess: '문의 내용을 정리하고 있습니다.',
+    ai_pdca: '해결 방안을 분석하고 있습니다.',
+    ai_impact: '수정 작업의 영향을 분석하고 있습니다.',
     ai_review: '담당자가 문의 내용을 확인하고 있습니다.',
-    pending_approval: '검토가 완료되어 처리 승인을 대기하고 있습니다.',
+    pending_approval: '작업대기중',
+    ai_execution: '문제를 수정하고 있습니다.',
     ai_processing: '담당자가 요청 사항을 처리하고 있습니다.',
     completed: '요청하신 사항의 처리가 완료되었습니다.',
     admin_confirm: '처리 결과를 최종 확인하고 있습니다.',

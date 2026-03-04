@@ -86,7 +86,7 @@ type Tab = 'process' | 'board' | 'users' | 'servers';
 type BoardView = 'list' | 'detail';
 
 // Workflow step types
-type WorkflowStep = 'registered' | 'ai_review' | 'pending_approval' | 'ai_processing' | 'completed' | 'admin_confirm' | 'rework';
+type WorkflowStep = 'registered' | 'ai_preprocess' | 'ai_pdca' | 'ai_impact' | 'ai_review' | 'pending_approval' | 'ai_execution' | 'ai_processing' | 'completed' | 'admin_confirm' | 'rework';
 
 interface ProcessPost {
   id: number;
@@ -138,8 +138,12 @@ function cleanMarkdown(text: string): string {
 
 const STEP_CONFIG: Record<WorkflowStep, { label: string; className: string; icon: React.ReactNode }> = {
   registered: { label: '문의 등록', className: 'bg-blue-100 text-blue-700 border-blue-200', icon: <FileCheck className="h-3 w-3" /> },
+  ai_preprocess: { label: '문의 정리', className: 'bg-violet-100 text-violet-700 border-violet-200', icon: <Cpu className="h-3 w-3" /> },
+  ai_pdca: { label: 'PDCA 분석', className: 'bg-purple-100 text-purple-700 border-purple-200', icon: <Cpu className="h-3 w-3" /> },
+  ai_impact: { label: '영향도 분석', className: 'bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200', icon: <Activity className="h-3 w-3" /> },
   ai_review: { label: 'AI 확인', className: 'bg-purple-100 text-purple-700 border-purple-200', icon: <Cpu className="h-3 w-3" /> },
   pending_approval: { label: '승인 대기', className: 'bg-amber-100 text-amber-700 border-amber-200', icon: <Clock className="h-3 w-3" /> },
+  ai_execution: { label: '서버 수정 중', className: 'bg-orange-100 text-orange-700 border-orange-200', icon: <Activity className="h-3 w-3" /> },
   ai_processing: { label: 'AI 작업 중', className: 'bg-cyan-100 text-cyan-700 border-cyan-200', icon: <Activity className="h-3 w-3" /> },
   completed: { label: '완료', className: 'bg-emerald-100 text-emerald-700 border-emerald-200', icon: <CheckCircle2 className="h-3 w-3" /> },
   admin_confirm: { label: '관리자 컨펌', className: 'bg-indigo-100 text-indigo-700 border-indigo-200', icon: <Shield className="h-3 w-3" /> },
@@ -147,9 +151,15 @@ const STEP_CONFIG: Record<WorkflowStep, { label: string; className: string; icon
 };
 
 const STEP_TRANSITIONS: Record<WorkflowStep, { label: string; next: WorkflowStep }[]> = {
-  registered: [{ label: 'AI 확인 시작', next: 'ai_review' }],
+  registered: [{ label: 'AI 분석 시작', next: 'ai_preprocess' }],
+  ai_preprocess: [{ label: 'PDCA 분석', next: 'ai_pdca' }],
+  ai_pdca: [{ label: '영향도 분석', next: 'ai_impact' }],
+  ai_impact: [{ label: '승인 요청', next: 'pending_approval' }],
   ai_review: [{ label: '승인 요청', next: 'pending_approval' }],
-  pending_approval: [{ label: '승인 (AI 작업 시작)', next: 'ai_processing' }],
+  pending_approval: [{ label: '승인 (서버 수정 시작)', next: 'ai_execution' }],
+  ai_execution: [
+    { label: '관리자 컨펌', next: 'admin_confirm' },
+  ],
   ai_processing: [
     { label: '작업 완료', next: 'completed' },
     { label: '관리자 컨펌 필요', next: 'admin_confirm' },
@@ -162,7 +172,7 @@ const STEP_TRANSITIONS: Record<WorkflowStep, { label: string; next: WorkflowStep
     { label: '완료 처리', next: 'completed' },
     { label: '재작업 요청', next: 'rework' },
   ],
-  rework: [{ label: 'AI 재작업 시작', next: 'ai_processing' }],
+  rework: [{ label: 'AI 재분석 시작', next: 'ai_preprocess' }],
 };
 
 export default function AdminApp({ currentUser, onLogout }: AdminAppProps) {
@@ -276,7 +286,8 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
   const [stepFilter, setStepFilter] = useState<WorkflowStep | ''>('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [stepCounts, setStepCounts] = useState<Record<WorkflowStep, number>>({
-    registered: 0, ai_review: 0, pending_approval: 0, ai_processing: 0,
+    registered: 0, ai_preprocess: 0, ai_pdca: 0, ai_impact: 0, ai_review: 0,
+    pending_approval: 0, ai_execution: 0, ai_processing: 0,
     completed: 0, admin_confirm: 0, rework: 0,
   });
 
@@ -623,11 +634,11 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
                     <Button
                       size="sm"
                       disabled={transitioning}
-                      onClick={() => handleTransition(selectedPost.id, 'ai_processing')}
+                      onClick={() => handleTransition(selectedPost.id, 'ai_execution')}
                       className="bg-emerald-600 hover:bg-emerald-700 text-white"
                     >
                       <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />
-                      승인 (작업 시작)
+                      승인 (서버 수정 시작)
                     </Button>
                   </CardContent>
                 </Card>
@@ -772,7 +783,7 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
   }
 
   // ─── 메인 플로우 단계 순서 ───
-  const MAIN_FLOW: WorkflowStep[] = ['registered', 'ai_review', 'pending_approval', 'ai_processing', 'completed'];
+  const MAIN_FLOW: WorkflowStep[] = ['registered', 'ai_preprocess', 'ai_pdca', 'ai_impact', 'pending_approval', 'ai_execution', 'admin_confirm', 'completed'];
 
   // 특정 단계가 메인 플로우에서 몇 번째인지 (0-based), 특수 상태는 -1
   const getStepIndex = (step: WorkflowStep) => MAIN_FLOW.indexOf(step);
@@ -805,7 +816,7 @@ function ProcessManagement({ currentUser }: { currentUser: User }) {
       )}
 
       {/* Dashboard Summary */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+      <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2">
         {(Object.keys(STEP_CONFIG) as WorkflowStep[]).map(step => {
           const cfg = STEP_CONFIG[step];
           const count = stepCounts[step] || 0;

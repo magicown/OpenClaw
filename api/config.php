@@ -1,4 +1,7 @@
 <?php
+// 타임존 설정 (KST)
+date_default_timezone_set('Asia/Seoul');
+
 // 데이터베이스 설정
 define('DB_HOST', '127.0.0.1');
 define('DB_NAME', 'qna_board');
@@ -72,6 +75,8 @@ function getDB() {
                     PDO::ATTR_EMULATE_PREPARES => false
                 ]
             );
+            // DB 세션 타임존을 KST로 설정
+            $pdo->exec("SET time_zone = '+09:00'");
         } catch (PDOException $e) {
             jsonResponse(['error' => 'Database connection failed: ' . $e->getMessage()], 500);
         }
@@ -393,6 +398,369 @@ PROMPT;
 
     if ($returnCode !== 0 || empty(trim($output))) {
         throw new Exception('Claude Code 실행 실패 (code: ' . $returnCode . '): ' . substr($output, 0, 500));
+    }
+
+    return trim($output);
+}
+
+// 텔레그램 인라인 키보드 포함 메시지 전송
+function sendTelegramWithInlineKeyboard($message, $buttons) {
+    if (empty(TELEGRAM_BOT_TOKEN) || empty(TELEGRAM_CHAT_ID)) {
+        return false;
+    }
+
+    $url = 'https://api.telegram.org/bot' . TELEGRAM_BOT_TOKEN . '/sendMessage';
+    $payload = json_encode([
+        'chat_id' => TELEGRAM_CHAT_ID,
+        'text' => $message,
+        'parse_mode' => 'HTML',
+        'reply_markup' => [
+            'inline_keyboard' => $buttons
+        ],
+    ]);
+
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+
+    $response = curl_exec($ch);
+    curl_close($ch);
+
+    if ($response === false) return false;
+
+    $result = json_decode($response, true);
+    if (!empty($result['ok']) && !empty($result['result']['message_id'])) {
+        return $result['result']['message_id'];
+    }
+    return false;
+}
+
+// Phase 1: 문의 정리 — 제목/내용/첨부파일 메타데이터를 구조화된 질문으로 정리
+function organizeQuestionWithAI($title, $content, $category, $attachments = []) {
+    $attachmentInfo = '';
+    if (!empty($attachments)) {
+        $attachmentInfo = "\n[첨부파일 정보]\n";
+        foreach ($attachments as $att) {
+            $attachmentInfo .= "- 파일명: {$att['file_name']}, 크기: {$att['file_size']}bytes, 타입: {$att['mime_type']}\n";
+        }
+    }
+
+    $prompt = <<<PROMPT
+당신은 IT 서비스 운영팀의 문의 접수 담당자입니다.
+고객 문의를 읽고, 기술팀이 바로 분석할 수 있도록 구조화된 형태로 정리해주세요.
+
+절대 마크다운 문법(#, **, |, ---, >, ```)을 사용하지 마세요.
+이모지와 일반 텍스트, 번호 목록만 사용하세요.
+
+[카테고리]: {$category}
+[제목]: {$title}
+[내용]: {$content}
+{$attachmentInfo}
+
+아래 형식으로 정리해주세요:
+
+📋 정리된 문의
+- 문의 유형: (오류/건의/긴급/추가개발/기타)
+- 긴급도: (긴급/높음/보통/낮음)
+- 핵심 문제: (1-2줄 요약)
+
+🔎 확인이 필요한 사항
+1. (구체적 확인 항목)
+2. (구체적 확인 항목)
+3. (구체적 확인 항목)
+
+🖥️ 서버 점검 항목
+(이 문의를 해결하기 위해 서버에서 확인해야 할 구체적 항목)
+1. (점검 항목)
+2. (점검 항목)
+
+📎 첨부파일 참고사항
+(첨부파일이 있으면 해당 파일이 문제 파악에 어떤 도움이 되는지 정리)
+PROMPT;
+
+    $escapedPrompt = escapeshellarg($prompt);
+    $command = CLAUDE_CLI_PATH . ' -p ' . $escapedPrompt . ' --output-format text 2>&1';
+
+    $outputLines = [];
+    $returnCode = null;
+    exec($command, $outputLines, $returnCode);
+    $output = implode("\n", $outputLines);
+
+    if ($returnCode !== 0 || empty(trim($output))) {
+        throw new Exception('Phase 1 (문의 정리) 실패 (code: ' . $returnCode . '): ' . substr($output, 0, 500));
+    }
+
+    return trim($output);
+}
+
+// Phase 2: PDCA 분석 — 정리된 질문 + 서버진단 데이터로 수정 계획 도출
+function runPDCAWithClaude($organizedQuestion, $serverInfo = null, $diagnostics = null, $feedback = null) {
+    $feedbackSection = '';
+    if ($feedback) {
+        $feedbackSection = <<<FEEDBACK
+
+🔄 [관리자 피드백 — 재분석 요청]
+이전 분석에 대해 관리자가 아래 피드백을 보냈습니다.
+반드시 이 피드백을 반영하여 재분석해주세요.
+
+관리자 피드백: {$feedback}
+
+FEEDBACK;
+    }
+
+    $serverSection = '';
+    if ($serverInfo) {
+        $serverSection = "\n🖥️ [대상 서버 정보]\n";
+        $serverSection .= "- 사이트명: {$serverInfo['display_name']}\n";
+        $serverSection .= "- 서버 IP: {$serverInfo['server_ip']}\n";
+        $serverSection .= "- 사이트 주소: {$serverInfo['site_url']}\n";
+        $serverSection .= "- 관리자 페이지: {$serverInfo['admin_url']}\n";
+
+        if ($diagnostics) {
+            $serverSection .= "\n📡 [실시간 서버 진단 결과]\n";
+            $labels = [
+                'uptime' => '서버 가동시간', 'disk' => '디스크 사용량',
+                'memory' => '메모리 상태', 'cpu_load' => 'CPU 부하',
+                'web_server' => '웹서버 상태', 'mysql_status' => 'MySQL 상태',
+                'php_fpm_status' => 'PHP-FPM 상태', 'listening_ports' => '리슨 포트',
+                'site_http_check' => 'HTTP 응답', 'db_check' => 'DB 접속',
+                'db_process' => 'DB 프로세스', 'web_error_log' => '웹서버 에러 로그',
+                'php_error_log' => 'PHP 에러 로그', 'recent_cron' => '크론 로그',
+            ];
+            foreach ($diagnostics as $key => $value) {
+                $label = $labels[$key] ?? $key;
+                $serverSection .= "--- {$label} ---\n{$value}\n\n";
+            }
+        }
+    }
+
+    $prompt = <<<PROMPT
+당신은 웹 서비스 운영팀의 PDCA 분석 전문가입니다.
+아래 정리된 문의를 바탕으로 PDCA(Plan-Do-Check-Act) 방법론에 따라 구체적인 수정 계획을 도출해주세요.
+
+절대 마크다운 문법(#, **, |, ---, >, ```)을 사용하지 마세요.
+이모지와 일반 텍스트, 번호 목록만 사용하세요.
+{$feedbackSection}{$serverSection}
+📋 [정리된 문의]
+{$organizedQuestion}
+
+아래 PDCA 형식을 정확히 따라주세요:
+
+📊 PDCA 분석 보고서
+
+🔍 Plan (문제 정의 및 계획)
+- 문제 정의: (무엇이 문제인지 명확히)
+- 근본 원인: (왜 이 문제가 발생했는지)
+- 목표: (해결 후 기대 상태)
+- 수정 대상:
+  1. 대상: (파일/설정/서비스)
+     변경 내용: (구체적으로 무엇을 어떻게 변경)
+     명령어: (실행할 구체적 명령어나 수정 내용)
+  2. 대상: (파일/설정/서비스)
+     변경 내용: (구체적 변경)
+     명령어: (실행할 명령어)
+
+🛠️ Do (실행 절차)
+- 실행 순서:
+  1. (첫 번째 작업 — 구체적 명령어 포함)
+  2. (두 번째 작업)
+  3. (세 번째 작업)
+- 예상 소요 시간: (분 단위)
+- 서비스 중단 필요 여부: (예/아니오)
+
+✅ Check (검증 방법)
+- 검증 항목:
+  1. (확인할 사항과 확인 방법)
+  2. (확인할 사항과 확인 방법)
+- 성공 기준: (무엇이 확인되면 성공인지)
+
+🔄 Act (후속 조치)
+- 모니터링 항목: (수정 후 지속 모니터링할 사항)
+- 재발 방지: (같은 문제 재발 방지를 위한 조치)
+- 에스컬레이션: (해결 불가 시 대안)
+
+📌 최종 판단
+- 우선순위: (긴급/높음/보통/낮음)
+- 권장 조치: (즉시처리/일반처리/모니터링/보류)
+- 위험도: (낮음/중간/높음/매우높음)
+- 승인 요청: (관리자에게 승인받아야 할 구체적 내용)
+PROMPT;
+
+    $escapedPrompt = escapeshellarg($prompt);
+    $command = CLAUDE_CLI_PATH . ' -p ' . $escapedPrompt . ' --output-format text 2>&1';
+
+    $outputLines = [];
+    $returnCode = null;
+    exec($command, $outputLines, $returnCode);
+    $output = implode("\n", $outputLines);
+
+    if ($returnCode !== 0 || empty(trim($output))) {
+        throw new Exception('Phase 2 (PDCA 분석) 실패 (code: ' . $returnCode . '): ' . substr($output, 0, 500));
+    }
+
+    return trim($output);
+}
+
+// Phase 3: 영향도 분석 — PDCA 수정 계획이 서버에 미칠 영향 분석
+function analyzeImpactWithAI($pdcaPlan, $serverInfo = null, $diagnostics = null) {
+    $serverSection = '';
+    if ($serverInfo) {
+        $serverSection = "\n🖥️ [서버 현재 상태]\n";
+        $serverSection .= "- 사이트명: {$serverInfo['display_name']}\n";
+        $serverSection .= "- 서버 IP: {$serverInfo['server_ip']}\n";
+        $serverSection .= "- 사이트 주소: {$serverInfo['site_url']}\n";
+
+        if ($diagnostics) {
+            $serverSection .= "\n📡 [서버 진단 (재수집)]\n";
+            $labels = [
+                'uptime' => '서버 가동시간', 'disk' => '디스크 사용량',
+                'memory' => '메모리 상태', 'cpu_load' => 'CPU 부하',
+                'web_server' => '웹서버 상태', 'mysql_status' => 'MySQL 상태',
+                'listening_ports' => '리슨 포트', 'site_http_check' => 'HTTP 응답',
+            ];
+            foreach ($diagnostics as $key => $value) {
+                if (isset($labels[$key])) {
+                    $serverSection .= "--- {$labels[$key]} ---\n{$value}\n\n";
+                }
+            }
+        }
+    }
+
+    $prompt = <<<PROMPT
+당신은 서버 운영 영향도 분석 전문가입니다.
+아래 PDCA 수정 계획을 검토하고, 이 수정 작업이 서버와 서비스에 미칠 영향을 분석해주세요.
+
+절대 마크다운 문법(#, **, |, ---, >, ```)을 사용하지 마세요.
+이모지와 일반 텍스트, 번호 목록만 사용하세요.
+{$serverSection}
+📊 [PDCA 수정 계획]
+{$pdcaPlan}
+
+아래 형식으로 영향도 분석을 작성해주세요:
+
+⚠️ 영향도 분석 보고서
+
+1. 서비스 영향
+   - 수정 중 서비스 중단 여부: (예/아니오)
+   - 예상 다운타임: (없음/N초/N분)
+   - 영향받는 사이트/도메인: (목록 또는 없음)
+
+2. 사이드이펙트
+   - 설정 변경 시 다른 서비스 영향: (있음/없음, 상세)
+   - 공유 리소스 영향: (DB/웹서버/PHP-FPM 등)
+   - 다른 사이트 영향: (있음/없음)
+
+3. 데이터 영향
+   - DB 변경 시 기존 데이터 영향: (있음/없음, 상세)
+   - 파일 변경 시 기존 설정 덮어쓰기: (있음/없음)
+
+4. 롤백 계획
+   - 백업 대상: (파일/DB 목록)
+   - 롤백 명령어:
+     1. (롤백 명령)
+     2. (롤백 명령)
+   - 롤백 소요 시간: (예상 시간)
+
+5. 위험도 등급
+   - 등급: (낮음/중간/높음/매우높음)
+   - 판단 근거: (왜 이 등급인지)
+   - 권장 사항: (주의사항이나 추가 조치)
+PROMPT;
+
+    $escapedPrompt = escapeshellarg($prompt);
+    $command = CLAUDE_CLI_PATH . ' -p ' . $escapedPrompt . ' --output-format text 2>&1';
+
+    $outputLines = [];
+    $returnCode = null;
+    exec($command, $outputLines, $returnCode);
+    $output = implode("\n", $outputLines);
+
+    if ($returnCode !== 0 || empty(trim($output))) {
+        throw new Exception('Phase 3 (영향도 분석) 실패 (code: ' . $returnCode . '): ' . substr($output, 0, 500));
+    }
+
+    return trim($output);
+}
+
+// Phase 5: 서버 수정 실행 — Claude CLI가 SSH로 서버 접속하여 수정 작업 수행
+function executeFixWithClaude($pdcaPlan, $serverInfo) {
+    if (empty($serverInfo) || empty($serverInfo['server_ip']) || empty($serverInfo['ssh_password'])) {
+        throw new Exception('서버 접속 정보가 없어 실행할 수 없습니다.');
+    }
+
+    // 위험 명령 블랙리스트
+    $dangerousPatterns = [
+        'rm -rf /', 'mkfs', 'dd if=', ':(){', 'chmod -R 777 /',
+        'shutdown', 'reboot', 'halt', 'poweroff',
+        'DROP DATABASE', 'DROP TABLE', 'TRUNCATE',
+        '> /dev/sda', 'format c:',
+    ];
+
+    $ip = $serverInfo['server_ip'];
+    $user = $serverInfo['ssh_user'] ?: 'root';
+    $password = $serverInfo['ssh_password'];
+    $siteUrl = $serverInfo['site_url'] ?: '';
+
+    $prompt = <<<PROMPT
+당신은 서버 운영 엔지니어입니다. 아래 PDCA 수정 계획에 따라 서버에서 수정 작업을 수행해주세요.
+
+서버 접속 정보:
+- IP: {$ip}
+- 사용자: {$user}
+- 비밀번호: {$password}
+- 사이트: {$siteUrl}
+
+수행할 작업:
+{$pdcaPlan}
+
+규칙:
+1. 수정 전 반드시 현재 상태를 백업하세요 (cp, mysqldump 등)
+2. 한 번에 하나씩 명령을 실행하고 결과를 확인하세요
+3. 절대 rm -rf /, DROP DATABASE, shutdown 등 위험한 명령을 실행하지 마세요
+4. 수정 후 서비스 상태를 확인하세요 (systemctl status, curl 등)
+5. 모든 작업 결과를 아래 형식으로 보고하세요
+
+보고 형식:
+📋 실행 보고서
+
+실행한 작업:
+1. [명령어]: (실행한 명령)
+   [결과]: (출력 결과 요약)
+   [상태]: (성공/실패)
+
+서비스 상태 확인:
+- 웹서버: (정상/비정상)
+- DB: (정상/비정상)
+- 사이트 접속: (정상/비정상)
+
+롤백 명령어:
+1. (백업한 내용을 복원하는 명령)
+2. (서비스 재시작 명령)
+
+최종 결과: (성공/부분성공/실패)
+PROMPT;
+
+    $escapedPrompt = escapeshellarg($prompt);
+    $command = CLAUDE_CLI_PATH . ' -p ' . $escapedPrompt . ' --allowedTools "Bash(command:*)" --output-format text 2>&1';
+
+    $outputLines = [];
+    $returnCode = null;
+    exec($command, $outputLines, $returnCode);
+    $output = implode("\n", $outputLines);
+
+    if ($returnCode !== 0 || empty(trim($output))) {
+        throw new Exception('Phase 5 (서버 수정 실행) 실패 (code: ' . $returnCode . '): ' . substr($output, 0, 500));
+    }
+
+    // 위험 명령 실행 여부 체크
+    foreach ($dangerousPatterns as $pattern) {
+        if (stripos($output, $pattern) !== false) {
+            throw new Exception('위험한 명령이 감지되었습니다: ' . $pattern);
+        }
     }
 
     return trim($output);
