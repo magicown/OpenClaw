@@ -158,15 +158,22 @@ try {
             $telegramMsg .= "📝 제목: {$post['title']}\n";
             $telegramMsg .= "🏢 사이트: {$siteName}\n\n";
             $telegramMsg .= "📋 실행 결과:\n{$resultSummary}";
+            sendTelegramNotification($telegramMsg);
         } else {
-            $telegramMsg = "🔧 서버 수정 완료 — 관리자 확인 필요\n\n";
+            $telegramMsg = "🔧 서버 수정 완료 — 최종 확인\n\n";
             $telegramMsg .= "📌 게시글 #{$post['id']}\n";
             $telegramMsg .= "📝 제목: {$post['title']}\n";
             $telegramMsg .= "🏢 사이트: {$siteName}\n\n";
-            $telegramMsg .= "📋 실행 결과:\n{$resultSummary}\n\n";
-            $telegramMsg .= "관리자 페이지에서 최종 확인 후 완료 처리해주세요.";
+            $telegramMsg .= "📋 실행 결과:\n{$resultSummary}";
+
+            $buttons = [
+                [
+                    ['text' => '✅ 완료', 'callback_data' => "confirm_{$post['id']}"],
+                    ['text' => '🔄 재작업', 'callback_data' => "rework_{$post['id']}"],
+                ]
+            ];
+            sendTelegramWithInlineKeyboard($telegramMsg, $buttons);
         }
-        sendTelegramNotification($telegramMsg);
 
         logMsg("게시글 #{$post['id']}: admin_confirm 전환 + 텔레그램 보고 완료");
 

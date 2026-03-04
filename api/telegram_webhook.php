@@ -104,6 +104,72 @@ if (isset($update['callback_query'])) {
         exit;
     }
 
+    // confirm_{postId} — 최종 확인 완료
+    if (preg_match('/^confirm_(\d+)$/', $callbackData, $matches)) {
+        $postId = (int)$matches[1];
+
+        try {
+            $db->beginTransaction();
+
+            $stmt = $db->prepare("UPDATE posts SET status = 'completed' WHERE id = ? AND status = 'admin_confirm'");
+            $stmt->execute([$postId]);
+
+            if ($stmt->rowCount() === 0) {
+                $db->rollBack();
+                answerCallback($callbackId, '이미 처리된 게시글입니다.');
+                exit;
+            }
+
+            $db->prepare("INSERT INTO process_logs (post_id, step, content) VALUES (?, 'completed', '관리자가 텔레그램에서 최종 확인 완료하였습니다.')")
+                ->execute([$postId]);
+
+            $db->commit();
+
+            editTelegramMessage($chatId, $messageId, $callbackQuery['message']['text'] . "\n\n✅ 완료 처리됨");
+            answerCallback($callbackId, '완료 처리되었습니다.');
+
+        } catch (Exception $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            answerCallback($callbackId, '오류: ' . $e->getMessage());
+        }
+
+        exit;
+    }
+
+    // rework_{postId} — 재작업 요청
+    if (preg_match('/^rework_(\d+)$/', $callbackData, $matches)) {
+        $postId = (int)$matches[1];
+
+        try {
+            $db->beginTransaction();
+
+            $stmt = $db->prepare("UPDATE posts SET status = 'rework' WHERE id = ? AND status = 'admin_confirm'");
+            $stmt->execute([$postId]);
+
+            if ($stmt->rowCount() === 0) {
+                $db->rollBack();
+                answerCallback($callbackId, '이미 처리된 게시글입니다.');
+                exit;
+            }
+
+            $db->prepare("INSERT INTO process_logs (post_id, step, content) VALUES (?, 'rework', '관리자가 텔레그램에서 재작업을 요청하였습니다.')")
+                ->execute([$postId]);
+
+            $db->commit();
+
+            editTelegramMessage($chatId, $messageId, $callbackQuery['message']['text'] . "\n\n🔄 재작업 요청됨 — 피드백을 입력해주세요.");
+            sendTelegramNotification("📝 게시글 #{$postId} 재작업 피드백을 입력해주세요.\n\n수정 방향을 텍스트로 보내주세요.\n(다음 텍스트 메시지가 피드백으로 저장됩니다)");
+
+            answerCallback($callbackId, '재작업 요청됨. 피드백을 입력해주세요.');
+
+        } catch (Exception $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            answerCallback($callbackId, '오류: ' . $e->getMessage());
+        }
+
+        exit;
+    }
+
     answerCallback($callbackId, '알 수 없는 요청입니다.');
     exit;
 }
