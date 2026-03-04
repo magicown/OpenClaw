@@ -196,6 +196,8 @@ function requireAdmin() {
 
 // Claude Code CLI 경로
 define('CLAUDE_CLI_PATH', '/usr/local/bin/claude');
+// Claude CLI 실행 유저 (root에서는 --dangerously-skip-permissions 사용 불가)
+define('CLAUDE_CLI_USER', 'claude-runner');
 
 // 대상 서버에 SSH 접속하여 진단 데이터 수집
 function runServerDiagnostics($serverInfo) {
@@ -746,7 +748,8 @@ function executeFixWithClaude($pdcaPlan, $serverInfo, $postId = null, $postTitle
 PROMPT;
 
     $escapedPrompt = escapeshellarg($prompt);
-    $command = CLAUDE_CLI_PATH . ' -p ' . $escapedPrompt . ' --dangerously-skip-permissions --output-format text 2>&1';
+    $innerCmd = CLAUDE_CLI_PATH . ' -p ' . $escapedPrompt . ' --dangerously-skip-permissions --output-format text 2>&1';
+    $command = 'su - ' . CLAUDE_CLI_USER . ' -c ' . escapeshellarg($innerCmd);
 
     // proc_open으로 실행하여 실시간 출력 읽기 + 1분마다 텔레그램 진행 보고
     $descriptors = [
@@ -893,7 +896,8 @@ function executeAdminCommand($commandText, $serverInfo, $postId = null) {
 PROMPT;
 
     $escapedPrompt = escapeshellarg($prompt);
-    $command = CLAUDE_CLI_PATH . ' -p ' . $escapedPrompt . ' --dangerously-skip-permissions --output-format text 2>&1';
+    $innerCmd = CLAUDE_CLI_PATH . ' -p ' . $escapedPrompt . ' --dangerously-skip-permissions --output-format text 2>&1';
+    $command = 'su - ' . CLAUDE_CLI_USER . ' -c ' . escapeshellarg($innerCmd);
 
     $outputLines = [];
     $returnCode = null;
@@ -964,7 +968,8 @@ QNA 게시판 시스템에서 에러가 발생했습니다. 에러를 분석하�
 PROMPT;
 
     $escapedPrompt = escapeshellarg($prompt);
-    $command = CLAUDE_CLI_PATH . ' -p ' . $escapedPrompt . ' --dangerously-skip-permissions --output-format text 2>&1';
+    $innerCmd = CLAUDE_CLI_PATH . ' -p ' . $escapedPrompt . ' --dangerously-skip-permissions --output-format text 2>&1';
+    $command = 'su - ' . CLAUDE_CLI_USER . ' -c ' . escapeshellarg($innerCmd);
 
     $outputLines = [];
     $returnCode = null;
