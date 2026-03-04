@@ -129,11 +129,22 @@ try {
                 0
             ]);
 
-        // admin_confirm으로 전환
-        $db->prepare("UPDATE posts SET status = 'admin_confirm' WHERE id = ?")->execute([$post['id']]);
+        // 자동/수동 모드 확인
+        $modeStmt = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'auto_process_mode'");
+        $modeStmt->execute();
+        $autoMode = ($modeStmt->fetchColumn() ?: 'manual') === 'auto';
 
-        $db->prepare("INSERT INTO process_logs (post_id, step, content) VALUES (?, 'admin_confirm', ?)")
-            ->execute([$post['id'], "서버 수정이 완료되었습니다. 관리자 최종 확인이 필요합니다.\n\n" . $executionResult]);
+        if ($autoMode) {
+            // 자동 모드: 바로 completed 처리
+            $db->prepare("UPDATE posts SET status = 'completed' WHERE id = ?")->execute([$post['id']]);
+            $db->prepare("INSERT INTO process_logs (post_id, step, content) VALUES (?, 'completed', ?)")
+                ->execute([$post['id'], "서버 수정이 완료되었습니다. (자동 처리)\n\n" . $executionResult]);
+        } else {
+            // 수동 모드: admin_confirm으로 전환
+            $db->prepare("UPDATE posts SET status = 'admin_confirm' WHERE id = ?")->execute([$post['id']]);
+            $db->prepare("INSERT INTO process_logs (post_id, step, content) VALUES (?, 'admin_confirm', ?)")
+                ->execute([$post['id'], "서버 수정이 완료되었습니다. 관리자 최종 확인이 필요합니다.\n\n" . $executionResult]);
+        }
 
         $db->commit();
 
@@ -141,12 +152,20 @@ try {
         $siteName = $post['user_site'] ?? '알 수 없음';
         $resultSummary = mb_substr($executionResult, 0, 500);
 
-        $telegramMsg = "🔧 서버 수정 완료 — 관리자 확인 필요\n\n";
-        $telegramMsg .= "📌 게시글 #{$post['id']}\n";
-        $telegramMsg .= "📝 제목: {$post['title']}\n";
-        $telegramMsg .= "🏢 사이트: {$siteName}\n\n";
-        $telegramMsg .= "📋 실행 결과:\n{$resultSummary}\n\n";
-        $telegramMsg .= "관리자 페이지에서 최종 확인 후 완료 처리해주세요.";
+        if ($autoMode) {
+            $telegramMsg = "✅ 서버 수정 완료 (자동 처리)\n\n";
+            $telegramMsg .= "📌 게시글 #{$post['id']}\n";
+            $telegramMsg .= "📝 제목: {$post['title']}\n";
+            $telegramMsg .= "🏢 사이트: {$siteName}\n\n";
+            $telegramMsg .= "📋 실행 결과:\n{$resultSummary}";
+        } else {
+            $telegramMsg = "🔧 서버 수정 완료 — 관리자 확인 필요\n\n";
+            $telegramMsg .= "📌 게시글 #{$post['id']}\n";
+            $telegramMsg .= "📝 제목: {$post['title']}\n";
+            $telegramMsg .= "🏢 사이트: {$siteName}\n\n";
+            $telegramMsg .= "📋 실행 결과:\n{$resultSummary}\n\n";
+            $telegramMsg .= "관리자 페이지에서 최종 확인 후 완료 처리해주세요.";
+        }
         sendTelegramNotification($telegramMsg);
 
         logMsg("게시글 #{$post['id']}: admin_confirm 전환 + 텔레그램 보고 완료");
