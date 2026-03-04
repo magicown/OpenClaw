@@ -6,6 +6,9 @@ USE qna_board;
 -- 1. posts.status를 ENUM에서 VARCHAR(30)으로 변경 (기존 값 유지)
 ALTER TABLE posts MODIFY COLUMN status VARCHAR(30) DEFAULT 'registered';
 
+-- 1-1. process_logs.step도 VARCHAR(30)으로 변경
+ALTER TABLE process_logs MODIFY COLUMN step VARCHAR(30) NOT NULL;
+
 -- 2. AI 분석 결과 저장 테이블
 CREATE TABLE IF NOT EXISTS ai_analysis_results (
   id INT AUTO_INCREMENT PRIMARY KEY,
